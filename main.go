@@ -50,6 +50,19 @@ func main() {
 	})
 	appService.SetErrorWindow(errorWindow)
 
+	// Logs window
+	logsWindow := app.Window.NewWithOptions(application.WebviewWindowOptions{
+		Title:            "FreeSurf — Logs",
+		Width:            560,
+		Height:           420,
+		MinWidth:         360,
+		MinHeight:        240,
+		Hidden:           true,
+		BackgroundColour: application.NewRGB(0x12, 0x12, 0x14),
+		URL:              "/logs.html",
+	})
+	appService.SetLogsWindow(logsWindow)
+
 	if err := app.Run(); err != nil {
 		log.Fatal(err)
 	}

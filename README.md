@@ -2,19 +2,32 @@
 
 A minimalistic, multi-platform (macOS / Linux / Windows) VPN client.
 
-> **Status: v1 scaffold.** The full UI, data model and local storage are in place.
-> The big **Start** button currently toggles a *mock* connection state — the real
-> sing-box tunnel engine is the next milestone (see [Roadmap](#roadmap)).
+> **Status: working tunnel on macOS (VLESS).** The UI, data model, local storage,
+> and a real sing-box TUN engine are in place for macOS. Linux/Windows TUN and more
+> protocols are next (see [Roadmap](#roadmap)).
 
 ## What works today
 
-- Main window with a large **Start / Stop** button.
+- Main window with a large **Start / Stop** button (with a *connecting* state).
 - Server list below it. A server (a subscription) collapses to show its child
   nodes; single-node servers render flat.
 - Top-right **+** button → dropdown → **Paste from clipboard**: reads the system
   clipboard and imports a subscription URL or one-or-more share URIs into the list.
-- Select a node in the list, then connect/disconnect with the big button.
+- Select a node, hit **Start**: the app downloads & pins the sing-box core, builds
+  a TUN `config.json`, validates it with `sing-box check`, and launches the core
+  with elevated privileges (a macOS auth prompt). **Stop** tears it down.
 - Everything is persisted in SQLite.
+
+### sing-box engine
+
+- **Core:** the `sing-box-lx` fork is downloaded from GitHub (pinned version) into
+  `<data>/bin/sing-box` on first connect; the version is verified before use.
+- **Parser:** `vless://` share URIs → sing-box outbound (TLS / Reality / uTLS /
+  ALPN / flow / ws・grpc・http(upgrade) transports). VLESS only for now.
+- **Config:** full-tunnel TUN inbound (`auto_route`), DNS + route, proxy + direct
+  outbounds (sing-box 1.13.x schema).
+- **Privileges:** TUN needs root; on macOS the core is started via an `osascript`
+  admin prompt (macOS caches the right for ~5 min, so Stop usually won't re-prompt).
 
 ## Stack
 
@@ -69,12 +82,16 @@ State is stored in SQLite at:
 
 ## Roadmap
 
-1. **sing-box engine** — download & pin the `sing-box` binary, generate
-   `config.json`, launch/supervise it as a subprocess (TUN / system proxy), and
-   replace the mock connection state with real connect/disconnect.
-2. **Subscription fetching & full protocol parsing** — fetch subscription URLs and
-   decode VLESS / VMess / Trojan / Shadowsocks / Hysteria2 / TUIC / WireGuard …
-   into real nodes (currently a shallow best-effort parser).
+1. ~~**sing-box engine**~~ — done for macOS (download/pin core, generate TUN
+   `config.json`, validate, run with privileges, real connect/disconnect).
+2. **Linux & Windows TUN** — privilege elevation (pkexec/sudo on Linux; runas +
+   `wintun.dll` on Windows). Currently macOS-only; other platforms return a clear
+   "not yet supported" error.
+3. ~~**Subscription fetching**~~ — done. Paste a subscription URL or a Happ
+   `happ://crypt5/…` deep link (decrypted locally, then fetched with the Happ
+   `User-Agent` + a stable `X-Hwid`); servers are imported as collapsible nodes.
+4. **More protocols** — decode VMess / Trojan / Shadowsocks / Hysteria2 / TUIC /
+   WireGuard (currently VLESS only) and Happ crypt1–4 links (crypt5 only so far).
 
 ## License
 

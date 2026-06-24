@@ -22,11 +22,27 @@
         <span v-if="server.kind === 'subscription'" class="server-kind">sub</span>
       </div>
 
-      <button class="btn-icon server-del" title="Delete" @click="$emit('delete', server.id)">✕</button>
+      <div class="server-actions">
+        <button
+          v-if="hasNodes"
+          class="btn-icon"
+          title="Ping all nodes"
+          @click="store.pingServer(server.id)"
+        >📶</button>
+        <button
+          v-if="server.url"
+          class="btn-icon"
+          :class="{ spinning: store.refreshing[server.id] }"
+          title="Refresh subscription"
+          :disabled="store.refreshing[server.id]"
+          @click="store.refreshServer(server.id)"
+        >↻</button>
+        <button class="btn-icon server-del" title="Delete" @click="$emit('delete', server.id)">✕</button>
+      </div>
     </div>
 
     <div v-if="hasNodes && open" class="node-list">
-      <button
+      <div
         v-for="node in server.nodes"
         :key="node.id"
         class="node-row"
@@ -37,7 +53,13 @@
         <span class="node-name">{{ node.name }}</span>
         <span class="node-proto">{{ node.protocol }}</span>
         <span v-if="node.id === activeNodeId" class="node-active-badge">on</span>
-      </button>
+        <span class="node-ping" :class="pingClass(node.id)">{{ pingLabel(node.id) }}</span>
+        <button
+          class="btn-icon node-ping-btn"
+          title="Ping"
+          @click.stop="store.pingNode(node.id)"
+        >⚡</button>
+      </div>
     </div>
 
     <div v-else-if="!hasNodes" class="node-empty">
@@ -48,6 +70,7 @@
 
 <script setup>
 import { ref, computed } from 'vue'
+import { useServerStore } from '../stores/serverStore.js'
 
 const props = defineProps({
   server: { type: Object, required: true },
@@ -57,9 +80,28 @@ const props = defineProps({
 
 defineEmits(['select', 'delete'])
 
+const store = useServerStore()
 const open = ref(true)
 const hasNodes = computed(() => (props.server.nodes?.length ?? 0) > 0)
 const collapsible = computed(() => (props.server.nodes?.length ?? 0) > 1)
+
+function pingLabel(id) {
+  const p = store.pings[id]
+  if (p === undefined) return ''
+  if (p === 'ping') return '…'
+  if (p < 0) return 'timeout'
+  return `${p} ms`
+}
+
+function pingClass(id) {
+  const p = store.pings[id]
+  if (p === 'ping') return 'pinging'
+  if (p === undefined) return ''
+  if (p < 0) return 'bad'
+  if (p < 150) return 'good'
+  if (p < 400) return 'ok'
+  return 'slow'
+}
 </script>
 
 <style scoped>
@@ -122,8 +164,18 @@ const collapsible = computed(() => (props.server.nodes?.length ?? 0) > 1)
   padding: 1px 5px;
 }
 
-.server-del { flex-shrink: 0; font-size: 11px; }
+.server-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.server-del { font-size: 11px; }
 .server-del:hover { color: var(--danger); }
+
+.spinning { animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
 
 .node-list {
   display: flex;
@@ -142,6 +194,7 @@ const collapsible = computed(() => (props.server.nodes?.length ?? 0) > 1)
   text-align: left;
   width: 100%;
   color: var(--text);
+  cursor: pointer;
 }
 .node-row:hover { background: var(--surface2); }
 .node-row.selected { background: rgba(108,99,255,0.12); }
@@ -178,6 +231,26 @@ const collapsible = computed(() => (props.server.nodes?.length ?? 0) > 1)
   border-radius: 3px;
   padding: 1px 5px;
 }
+
+.node-ping {
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  min-width: 30px;
+  text-align: right;
+}
+.node-ping.good { color: var(--success); }
+.node-ping.ok { color: var(--warning); }
+.node-ping.slow { color: var(--danger); }
+.node-ping.bad { color: var(--danger); opacity: 0.7; }
+.node-ping.pinging { color: var(--muted); }
+
+.node-ping-btn {
+  font-size: 11px;
+  flex-shrink: 0;
+  opacity: 0.55;
+}
+.node-ping-btn:hover { opacity: 1; color: var(--accent); }
 
 .node-empty {
   font-size: 11px;

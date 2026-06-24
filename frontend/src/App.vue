@@ -3,6 +3,8 @@
     <div class="titlebar">
       <h1>FreeSurf</h1>
 
+      <button class="logs-btn" title="Show logs" @click="openLogs">Logs</button>
+
       <div class="add-wrap" ref="addWrap">
         <button class="add-btn" title="Add server" @click="menuOpen = !menuOpen">+</button>
         <div v-if="menuOpen" class="add-menu">
@@ -18,18 +20,22 @@
       <div class="hero">
         <button
           class="power-btn"
-          :class="{ connected: store.conn.connected }"
-          :disabled="!store.conn.connected && !store.selectedNodeId"
+          :class="{ connected: store.isConnected, connecting: store.isConnecting }"
+          :disabled="store.isConnecting || (!store.isConnected && !store.selectedNodeId)"
           @click="store.toggleConnection()"
         >
           <span class="power-glyph">⏻</span>
-          <span class="power-label">{{ store.conn.connected ? 'Stop' : 'Start' }}</span>
+          <span class="power-label">{{ powerLabel }}</span>
         </button>
 
         <div class="hero-status">
-          <template v-if="store.conn.connected">
+          <template v-if="store.isConnected">
             <span class="status-dot on" />
             Connected{{ store.activeNode ? ' · ' + store.activeNode.name : '' }}
+          </template>
+          <template v-else-if="store.isConnecting">
+            <span class="status-dot connecting" />
+            {{ store.conn.message || 'Connecting…' }}
           </template>
           <template v-else-if="store.selectedNode">
             <span class="status-dot" />
@@ -57,7 +63,7 @@
             :key="server.id"
             :server="server"
             :selected-node-id="store.selectedNodeId"
-            :active-node-id="store.conn.connected ? store.conn.nodeId : 0"
+            :active-node-id="store.isConnected ? store.conn.nodeId : 0"
             @select="store.select($event)"
             @delete="store.deleteServer($event)"
           />
@@ -68,13 +74,24 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useServerStore } from './stores/serverStore.js'
+import { OpenLogsWindow } from '../bindings/free-surf/app.js'
 import ServerItem from './components/ServerItem.vue'
 
 const store = useServerStore()
 const menuOpen = ref(false)
 const addWrap = ref(null)
+
+function openLogs() {
+  OpenLogsWindow()
+}
+
+const powerLabel = computed(() => {
+  if (store.isConnected) return 'Stop'
+  if (store.isConnecting) return '···'
+  return 'Start'
+})
 
 async function handleAdd() {
   menuOpen.value = false
@@ -99,9 +116,21 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+/* Logs button */
+.logs-btn {
+  margin-left: auto;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 11px;
+  padding: 3px 9px;
+  -webkit-app-region: no-drag;
+}
+.logs-btn:hover { border-color: var(--muted); color: var(--text); }
+
 /* Add (+) menu */
 .add-wrap {
-  margin-left: auto;
+  margin-left: 6px;
   position: relative;
   -webkit-app-region: no-drag;
 }
@@ -179,6 +208,17 @@ onBeforeUnmount(() => {
   background: rgba(62,207,142,0.08);
   box-shadow: 0 0 0 6px rgba(62,207,142,0.08);
 }
+.power-btn.connecting {
+  border-color: var(--accent);
+  color: var(--accent);
+  cursor: progress;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(108,99,255,0.18); }
+  50%      { box-shadow: 0 0 0 8px rgba(108,99,255,0.04); }
+}
 
 .power-glyph { font-size: 44px; line-height: 1; }
 .power-label {
@@ -208,6 +248,12 @@ onBeforeUnmount(() => {
   flex-shrink: 0;
 }
 .status-dot.on { background: var(--success); }
+.status-dot.connecting { background: var(--accent); animation: blink 1s ease-in-out infinite; }
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.3; }
+}
 
 /* Server section */
 .section-header {

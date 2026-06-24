@@ -6,6 +6,9 @@ import {
   AddFromClipboard,
   RenameServer,
   DeleteServer,
+  RefreshServer,
+  PingNode,
+  PingServer,
   GetConnState,
   Connect,
   Disconnect,
@@ -13,8 +16,14 @@ import {
 
 export const useServerStore = defineStore('servers', () => {
   const servers = ref([])
-  const conn = ref({ connected: false, nodeId: 0 })
+  const conn = ref({ status: 'disconnected', nodeId: 0, message: '' })
   const selectedNodeId = ref(0)
+  // nodeId -> latency: a number (ms), -1 (failed), or 'ping' (in progress).
+  const pings = ref({})
+  const refreshing = ref({}) // serverId -> bool
+
+  const isConnected = computed(() => conn.value.status === 'connected')
+  const isConnecting = computed(() => conn.value.status === 'connecting')
 
   // The currently selected node across all servers, or null.
   const selectedNode = computed(() => {
@@ -26,7 +35,7 @@ export const useServerStore = defineStore('servers', () => {
   })
 
   const activeNode = computed(() => {
-    if (!conn.value.connected) return null
+    if (conn.value.status !== 'connected') return null
     for (const s of servers.value) {
       const n = (s.nodes ?? []).find(n => n.id === conn.value.nodeId)
       if (n) return n
@@ -72,6 +81,33 @@ export const useServerStore = defineStore('servers', () => {
     await load()
   }
 
+  async function refreshServer(id) {
+    refreshing.value = { ...refreshing.value, [id]: true }
+    try {
+      await RefreshServer(id)
+      await load()
+    } finally {
+      refreshing.value = { ...refreshing.value, [id]: false }
+    }
+  }
+
+  async function pingNode(id) {
+    pings.value = { ...pings.value, [id]: 'ping' }
+    const ms = await PingNode(id)
+    pings.value = { ...pings.value, [id]: ms }
+  }
+
+  async function pingServer(id) {
+    const server = servers.value.find(s => s.id === id)
+    if (server) {
+      const marking = {}
+      for (const n of server.nodes ?? []) marking[n.id] = 'ping'
+      pings.value = { ...pings.value, ...marking }
+    }
+    const res = await PingServer(id) // { nodeId: ms }
+    pings.value = { ...pings.value, ...res }
+  }
+
   async function connect(nodeId) {
     conn.value = await Connect(nodeId)
   }
@@ -82,9 +118,9 @@ export const useServerStore = defineStore('servers', () => {
 
   // Toggle the connection using the selected node.
   async function toggleConnection() {
-    if (conn.value.connected) {
+    if (conn.value.status === 'connected') {
       await disconnect()
-    } else if (selectedNodeId.value) {
+    } else if (conn.value.status !== 'connecting' && selectedNodeId.value) {
       await connect(selectedNodeId.value)
     }
   }
@@ -96,12 +132,16 @@ export const useServerStore = defineStore('servers', () => {
   // Backend pushes updates when state changes from anywhere.
   Events.On('servers:changed', () => load())
   Events.On('vpn:state', ev => {
-    conn.value = ev.data?.[0] ?? ev.data ?? conn.value
+    conn.value = ev.data ?? conn.value
   })
 
   return {
     servers,
     conn,
+    pings,
+    refreshing,
+    isConnected,
+    isConnecting,
     selectedNodeId,
     selectedNode,
     activeNode,
@@ -110,6 +150,9 @@ export const useServerStore = defineStore('servers', () => {
     addFromClipboard,
     renameServer,
     deleteServer,
+    refreshServer,
+    pingNode,
+    pingServer,
     connect,
     disconnect,
     toggleConnection,

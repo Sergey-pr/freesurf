@@ -32,6 +32,14 @@ func GetNodesByServer(serverID int64) ([]Node, error) {
 	return nodes, err
 }
 
+// DeleteNodesByServer removes all nodes belonging to a server.
+func DeleteNodesByServer(serverID int64) error {
+	_, err := goquDB.Delete(nodeTable).
+		Where(goqu.C("server_id").Eq(serverID)).
+		Executor().Exec()
+	return err
+}
+
 // GetNodeByID returns the node with the given id, or an error if not found.
 func GetNodeByID(id int64) (*Node, error) {
 	var n Node

@@ -2,35 +2,30 @@ package main
 
 import (
 	"context"
-	"sync"
+	"fmt"
+	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
-// ConnState is the (mock, for now) VPN connection state surfaced to the UI.
-//
-// NOTE: connecting does not yet establish a real tunnel — that lands with the
-// sing-box engine milestone. For now Connect/Disconnect only flip this state and
-// emit a "vpn:state" event so the UI can be built and verified end to end.
-type ConnState struct {
-	Connected bool  `json:"connected"`
-	NodeID    int64 `json:"nodeId"`
-}
-
 type App struct {
 	errorWindow *application.WebviewWindow
-
-	mu   sync.Mutex
-	conn ConnState
+	logsWindow  *application.WebviewWindow
+	engine      *Engine
 }
 
 func NewApp() *App {
-	return &App{}
+	return &App{engine: newEngine()}
 }
 
 // SetErrorWindow stores the error window reference (called from main before Run).
 func (a *App) SetErrorWindow(w *application.WebviewWindow) {
 	a.errorWindow = w
+}
+
+// SetLogsWindow stores the logs window reference (called from main before Run).
+func (a *App) SetLogsWindow(w *application.WebviewWindow) {
+	a.logsWindow = w
 }
 
 func (a *App) showError(err error) {
@@ -44,6 +39,15 @@ func (a *App) showError(err error) {
 // ServiceStartup is called by the Wails v3 service system when the app starts.
 func (a *App) ServiceStartup(_ context.Context, _ application.ServiceOptions) error {
 	return initDB()
+}
+
+// ServiceShutdown tears down the tunnel and releases the cached authorization.
+// It must return quickly — stopping only removes the sentinel file, so no
+// privilege prompt can block app exit.
+func (a *App) ServiceShutdown() error {
+	a.engine.shutdown()
+	FreePrivilegedAuthorization()
+	return nil
 }
 
 // GetServers returns all servers, each with its nodes, for rendering the list.
@@ -68,7 +72,10 @@ func (a *App) AddFromClipboard() *ServerWithNodes {
 }
 
 func (a *App) addFromText(text string) *ServerWithNodes {
-	parsed, err := parseImport(text)
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+
+	parsed, err := buildImport(ctx, text)
 	if err != nil {
 		a.showError(err)
 		return nil
@@ -96,6 +103,75 @@ func (a *App) addFromText(text string) *ServerWithNodes {
 	return result
 }
 
+// RefreshServer re-fetches a subscription server's URL and replaces its nodes.
+func (a *App) RefreshServer(id int64) *ServerWithNodes {
+	server, err := GetServerByID(id)
+	if err != nil {
+		a.showError(err)
+		return nil
+	}
+	if server.URL == nil || *server.URL == "" {
+		a.showError(fmt.Errorf("this server has no subscription URL to refresh"))
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+
+	body, err := fetchSubscription(ctx, *server.URL)
+	if err != nil {
+		a.showError(err)
+		return nil
+	}
+	nodes := nodesFromBody(body)
+	if isBlockedPlaceholder(nodes) {
+		a.showError(fmt.Errorf("the subscription server rejected this client (\"app not supported\")"))
+		return nil
+	}
+	if len(nodes) == 0 {
+		a.showError(fmt.Errorf("no servers found in the subscription"))
+		return nil
+	}
+
+	if err := DeleteNodesByServer(id); err != nil {
+		a.showError(err)
+		return nil
+	}
+	saved := make([]Node, 0, len(nodes))
+	for i := range nodes {
+		n := nodes[i]
+		n.ServerID = id
+		if err := n.Save(); err != nil {
+			a.showError(err)
+			return nil
+		}
+		saved = append(saved, n)
+	}
+
+	application.Get().Event.Emit("servers:changed")
+	return &ServerWithNodes{Server: *server, Nodes: saved}
+}
+
+// PingNode returns the TCP connect latency (ms) to a node's server, or -1 on failure.
+func (a *App) PingNode(id int64) int {
+	node, err := GetNodeByID(id)
+	if err != nil {
+		a.showError(err)
+		return -1
+	}
+	return pingNodeURI(node.URI)
+}
+
+// PingServer pings all nodes of a server concurrently, returning nodeID → ms (-1 = fail).
+func (a *App) PingServer(id int64) map[int64]int {
+	nodes, err := GetNodesByServer(id)
+	if err != nil {
+		a.showError(err)
+		return map[int64]int{}
+	}
+	return pingNodes(nodes)
+}
+
 // RenameServer updates a server's display name.
 func (a *App) RenameServer(id int64, name string) *Server {
 	server, err := GetServerByID(id)
@@ -113,7 +189,7 @@ func (a *App) RenameServer(id int64, name string) *Server {
 }
 
 // DeleteServer removes a server and its nodes. If the active node belonged to it,
-// the connection is dropped.
+// the tunnel is torn down.
 func (a *App) DeleteServer(id int64) bool {
 	server, err := GetServerByID(id)
 	if err != nil {
@@ -125,14 +201,12 @@ func (a *App) DeleteServer(id int64) bool {
 		return false
 	}
 
-	a.mu.Lock()
-	if a.conn.Connected {
-		if _, err := GetNodeByID(a.conn.NodeID); err != nil {
-			a.conn = ConnState{}
-			application.Get().Event.Emit("vpn:state", a.conn)
+	// If the connected node no longer exists, drop the connection.
+	if st := a.engine.state(); st.Status != StatusDisconnected {
+		if _, err := GetNodeByID(st.NodeID); err != nil {
+			a.engine.disconnect()
 		}
 	}
-	a.mu.Unlock()
 
 	application.Get().Event.Emit("servers:changed")
 	return true
@@ -140,40 +214,56 @@ func (a *App) DeleteServer(id int64) bool {
 
 // GetConnState returns the current connection state.
 func (a *App) GetConnState() ConnState {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.conn
+	return a.engine.state()
 }
 
-// Connect marks the given node as the active connection (mock, no real tunnel).
+// Connect brings up the tunnel to the given node.
 func (a *App) Connect(nodeID int64) ConnState {
-	if _, err := GetNodeByID(nodeID); err != nil {
+	node, err := GetNodeByID(nodeID)
+	if err != nil {
 		a.showError(err)
-		return a.GetConnState()
+		return a.engine.state()
 	}
-	a.mu.Lock()
-	a.conn = ConnState{Connected: true, NodeID: nodeID}
-	state := a.conn
-	a.mu.Unlock()
-
-	application.Get().Event.Emit("vpn:state", state)
+	state, err := a.engine.connect(node)
+	if err != nil {
+		a.showError(err)
+	}
 	return state
 }
 
-// Disconnect tears down the active (mock) connection.
+// Disconnect tears down the active tunnel.
 func (a *App) Disconnect() ConnState {
-	a.mu.Lock()
-	a.conn = ConnState{}
-	state := a.conn
-	a.mu.Unlock()
-
-	application.Get().Event.Emit("vpn:state", state)
-	return state
+	return a.engine.disconnect()
 }
 
 // CloseErrorWindow hides the error window.
 func (a *App) CloseErrorWindow() {
 	if a.errorWindow != nil {
 		a.errorWindow.Hide()
+	}
+}
+
+// GetLog returns the current engine log buffer as a single string.
+func (a *App) GetLog() string {
+	return a.engine.logText()
+}
+
+// ClearLog empties the engine log buffer.
+func (a *App) ClearLog() {
+	a.engine.clearLog()
+}
+
+// OpenLogsWindow shows (and focuses) the logs window.
+func (a *App) OpenLogsWindow() {
+	if a.logsWindow != nil {
+		a.logsWindow.Show()
+		a.logsWindow.Focus()
+	}
+}
+
+// CloseLogsWindow hides the logs window.
+func (a *App) CloseLogsWindow() {
+	if a.logsWindow != nil {
+		a.logsWindow.Hide()
 	}
 }

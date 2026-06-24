@@ -127,11 +127,24 @@ func describeURI(uri string, index int) (protocol, name string) {
 	if i := strings.Index(uri, "://"); i > 0 {
 		protocol = strings.ToLower(uri[:i])
 	}
-	if parsed, err := url.Parse(uri); err == nil && parsed.Fragment != "" {
-		name = parsed.Fragment
+	// Take the fragment from the raw string and decode it; some providers
+	// double-encode it, so decode up to twice.
+	if h := strings.LastIndex(uri, "#"); h >= 0 && h+1 < len(uri) {
+		name = decodeFragment(uri[h+1:])
 	}
 	if name == "" {
 		name = fmt.Sprintf("%s %d", protocol, index+1)
 	}
 	return protocol, name
+}
+
+func decodeFragment(s string) string {
+	for i := 0; i < 2; i++ {
+		dec, err := url.PathUnescape(s)
+		if err != nil || dec == s {
+			break
+		}
+		s = dec
+	}
+	return s
 }
