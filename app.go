@@ -38,16 +38,31 @@ func (a *App) showError(err error) {
 
 // ServiceStartup is called by the Wails v3 service system when the app starts.
 func (a *App) ServiceStartup(_ context.Context, _ application.ServiceOptions) error {
+	// Drop any stale sentinel so we always start disconnected (and a left-over
+	// sentinel from a previous crash doesn't keep launchd running the tunnel).
+	stopTunnel()
 	return initDB()
 }
 
-// ServiceShutdown tears down the tunnel and releases the cached authorization.
-// It must return quickly — stopping only removes the sentinel file, so no
-// privilege prompt can block app exit.
+// ServiceShutdown tears down the tunnel on app exit. It must return quickly —
+// stopping only removes the sentinel file, so no privilege prompt can block exit.
 func (a *App) ServiceShutdown() error {
 	a.engine.shutdown()
-	FreePrivilegedAuthorization()
 	return nil
+}
+
+// UninstallHelper removes the privileged macOS LaunchDaemon (one password prompt).
+func (a *App) UninstallHelper() bool {
+	if err := uninstallHelper(); err != nil {
+		a.showError(err)
+		return false
+	}
+	return true
+}
+
+// HelperInstalled reports whether the privileged helper is installed.
+func (a *App) HelperInstalled() bool {
+	return helperInstalled()
 }
 
 // GetServers returns all servers, each with its nodes, for rendering the list.

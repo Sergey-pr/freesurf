@@ -34,12 +34,10 @@ const logBufferMax = 800
 // Engine owns the sing-box lifecycle: downloading the core, generating the
 // config, and supervising the privileged TUN process.
 type Engine struct {
-	mu        sync.Mutex
-	conn      ConnState
-	scriptPID int
-	corePID   int
-	xrayCmd   *exec.Cmd     // local Xray process (unprivileged)
-	stop      chan struct{} // closed to stop the liveness monitor
+	mu      sync.Mutex
+	conn    ConnState
+	xrayCmd *exec.Cmd     // local Xray process (unprivileged)
+	stop    chan struct{} // closed to stop the liveness monitor
 
 	logMu  sync.Mutex
 	logBuf []string
@@ -124,6 +122,17 @@ func (e *Engine) connect(node *Node) (ConnState, error) {
 	}
 	e.logf("Config OK (sing-box check passed).")
 
+	// Install / update the privileged helper if needed. This is the only step
+	// that may prompt for a password, and only the first time (or after a core
+	// version bump).
+	e.setState(ConnState{Status: StatusConnecting, NodeID: node.ID, Message: "Preparing helper…"})
+	if !helperInstalled() {
+		e.logf("Installing privileged helper (one-time, asks for password)…")
+	}
+	if err := ensureHelper(bin); err != nil {
+		return e.fail(node.ID, err)
+	}
+
 	// Start Xray (unprivileged) first so its SOCKS port is ready for sing-box.
 	xrayLog, err := xrayLogPath()
 	if err != nil {
@@ -140,39 +149,32 @@ func (e *Engine) connect(node *Node) (ConnState, error) {
 		e.stopXray(xrayCmd)
 		return e.fail(node.ID, err)
 	}
-	// (The privileged start script truncates the root-owned log for a fresh run.)
+	// Start fresh: the log dir is user-owned, so we can drop the (root-written)
+	// log even though its file is root-owned.
+	_ = os.Remove(logPath)
 
-	sentinel, err := sentinelPath()
-	if err != nil {
+	e.setState(ConnState{Status: StatusConnecting, NodeID: node.ID, Message: "Starting tunnel…"})
+	e.logf("Starting tunnel…")
+	if err := startTunnel(); err != nil {
 		e.stopXray(xrayCmd)
 		return e.fail(node.ID, err)
 	}
-	if err := os.WriteFile(sentinel, []byte("run\n"), 0644); err != nil {
-		e.stopXray(xrayCmd)
-		return e.fail(node.ID, err)
-	}
-
-	e.setState(ConnState{Status: StatusConnecting, NodeID: node.ID, Message: "Starting tunnel (admin)…"})
-	e.logf("Starting tunnel (requesting privileges if needed)…")
-	scriptPID, corePID, err := startTunnelPrivileged(bin, cfg, logPath, sentinel, os.Getpid())
-	if err != nil {
-		_ = os.Remove(sentinel)
+	if err := waitTunnelUp(logPath, 12*time.Second); err != nil {
+		stopTunnel()
 		e.stopXray(xrayCmd)
 		return e.fail(node.ID, err)
 	}
 
 	e.mu.Lock()
-	e.scriptPID = scriptPID
-	e.corePID = corePID
 	e.xrayCmd = xrayCmd
 	e.stop = make(chan struct{})
 	stop := e.stop
 	e.mu.Unlock()
 
-	go e.monitor(corePID, stop)
+	go e.monitor(stop)
 	go e.tailCore(logPath, stop)
 
-	e.logf("Tunnel up (core PID %d).", corePID)
+	e.logf("Tunnel up.")
 	state := ConnState{Status: StatusConnected, NodeID: node.ID}
 	e.setState(state)
 	return state, nil
@@ -209,21 +211,18 @@ func (e *Engine) shutdown() {
 
 func (e *Engine) teardown(emit bool) ConnState {
 	e.mu.Lock()
-	had := e.scriptPID > 0 || e.corePID > 0
 	xrayCmd := e.xrayCmd
+	had := xrayCmd != nil
 	if e.stop != nil {
 		close(e.stop)
 		e.stop = nil
 	}
-	e.scriptPID, e.corePID = 0, 0
 	e.xrayCmd = nil
 	e.mu.Unlock()
 
-	// Removing the sentinel makes the privileged babysitter kill the core within
-	// ~1s — no privileged call (and therefore no password prompt) needed here.
-	if sp, err := sentinelPath(); err == nil {
-		_ = os.Remove(sp)
-	}
+	// Removing the sentinel makes launchd stop the (root) core within ~1s — no
+	// privileged call, and therefore no password prompt, needed here.
+	stopTunnel()
 	e.stopXray(xrayCmd)
 	if had && emit {
 		e.logf("Stopping tunnel…")
@@ -239,8 +238,10 @@ func (e *Engine) teardown(emit bool) ConnState {
 	return state
 }
 
-// monitor watches the core process and flips the UI to disconnected if it dies.
-func (e *Engine) monitor(corePID int, stop chan struct{}) {
+// monitor watches the Xray process and tears the tunnel down if it dies. The root
+// sing-box is supervised by launchd (auto-restarted while connected), so we only
+// watch the unprivileged half here.
+func (e *Engine) monitor(stop chan struct{}) {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -249,35 +250,22 @@ func (e *Engine) monitor(corePID int, stop chan struct{}) {
 			return
 		case <-ticker.C:
 			e.mu.Lock()
-			xrayDead := e.xrayCmd != nil && e.xrayCmd.ProcessState != nil
-			e.mu.Unlock()
-			if processAlive(corePID) && !xrayDead {
-				continue
-			}
-			e.mu.Lock()
-			active := e.corePID == corePID
-			if active {
-				xrayCmd := e.xrayCmd
-				e.scriptPID, e.corePID = 0, 0
+			dead := e.xrayCmd == nil || e.xrayCmd.ProcessState != nil
+			xrayCmd := e.xrayCmd
+			if dead {
 				e.xrayCmd = nil
 				e.stop = nil
-				e.mu.Unlock()
-				if !processAlive(corePID) {
-					e.logf("sing-box process %d exited unexpectedly.", corePID)
-				} else {
-					e.logf("Xray process exited unexpectedly.")
-				}
-				// Remove sentinel so the privileged babysitter stops the core too.
-				if sp, err := sentinelPath(); err == nil {
-					_ = os.Remove(sp)
-				}
-				e.stopXray(xrayCmd)
-				e.appendCoreLogTail()
-				e.appendXrayLogTail()
-				e.setState(ConnState{Status: StatusDisconnected, Message: "Tunnel stopped — see logs"})
-			} else {
-				e.mu.Unlock()
 			}
+			e.mu.Unlock()
+			if !dead {
+				continue
+			}
+			e.logf("Xray process exited unexpectedly.")
+			stopTunnel()
+			e.stopXray(xrayCmd)
+			e.appendCoreLogTail()
+			e.appendXrayLogTail()
+			e.setState(ConnState{Status: StatusDisconnected, Message: "Tunnel stopped — see logs"})
 			return
 		}
 	}

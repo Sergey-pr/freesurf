@@ -11,12 +11,13 @@ import (
 // name and sent out directly, breaking the routing loop.
 //
 // Schema targets the pinned sing-box 1.13.x (TUN `address[]`, route actions).
-func buildSingboxConfig(socksPort int, logPath string) map[string]any {
+func buildSingboxConfig(socksPort int) map[string]any {
 	return map[string]any{
+		// No "output": the launchd daemon redirects sing-box's stderr to the log
+		// file (single writer), so we don't also open it from inside the core.
 		"log": map[string]any{
 			"level":     "info",
 			"timestamp": true,
-			"output":    logPath,
 		},
 		"dns": map[string]any{
 			"servers": []any{
@@ -82,11 +83,7 @@ func buildSingboxConfig(socksPort int, logPath string) map[string]any {
 // writeSingboxConfig writes the (node-independent) sing-box TUN→SOCKS config and
 // returns its path. The node-specific details live in the Xray config.
 func writeSingboxConfig(socksPort int) (string, error) {
-	logPath, err := coreLogPath()
-	if err != nil {
-		return "", err
-	}
-	cfg := buildSingboxConfig(socksPort, logPath)
+	cfg := buildSingboxConfig(socksPort)
 
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {

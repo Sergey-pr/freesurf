@@ -7,15 +7,15 @@ import (
 	"runtime"
 )
 
-// TUN auto-start with privilege elevation is implemented for macOS first.
-// Linux (pkexec/sudo) and Windows (runas + wintun.dll) are the next platform steps.
+// The privileged TUN helper is implemented for macOS first (launchd LaunchDaemon).
+// Linux (systemd unit / pkexec) and Windows (a Windows service + UAC) are the next
+// platform steps — both pure Go, no CGO. The tunnel start/stop (sentinel file) is
+// already cross-platform in helper.go; only install/uninstall is platform-specific.
 
-func startTunnelPrivileged(_, _, _, _ string, _ int) (scriptPID, singboxPID int, err error) {
-	return 0, 0, fmt.Errorf("TUN mode is not yet supported on %s", runtime.GOOS)
+func helperInstalled() bool { return false }
+
+func ensureHelper(_ string) error {
+	return fmt.Errorf("TUN mode is not yet supported on %s", runtime.GOOS)
 }
 
-func processAlive(_ int) bool {
-	return false
-}
-
-func FreePrivilegedAuthorization() {}
+func uninstallHelper() error { return nil }
