@@ -145,11 +145,11 @@ func (e *Engine) Connect(node *store.Node) (ConnState, error) {
 
 	e.setState(ConnState{Status: StatusConnecting, NodeID: node.ID, Message: "Building config…"})
 	e.logf("Generating configs…")
-	xrayCfg, err := proxy.WriteXrayConfig(node)
+	xrayCfg, serverIP, err := proxy.WriteXrayConfig(node)
 	if err != nil {
 		return e.fail(node.ID, err)
 	}
-	cfg, err := proxy.WriteSingboxConfig(node)
+	cfg, err := proxy.WriteSingboxConfig(serverIP)
 	if err != nil {
 		return e.fail(node.ID, err)
 	}
