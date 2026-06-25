@@ -1,0 +1,111 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  build-macos:
+    runs-on: macos-latest  # arm64 (Apple Silicon)
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with: { go-version: '1.25' }
+
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+
+      - name: Add Go bin to PATH
+        run: echo "$HOME/go/bin" >> $GITHUB_PATH
+
+      - run: go install github.com/wailsapp/wails/v3/cmd/wails3@latest
+      - run: cd frontend && npm ci
+      - run: wails3 task darwin:package
+
+      - run: cd bin && zip -r freesurf-macos-arm64.zip freesurf.app
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: bin/freesurf-macos-arm64.zip
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with: { go-version: '1.25' }
+
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+
+      - name: Add Go bin to PATH
+        shell: pwsh
+        run: Add-Content $env:GITHUB_PATH "$env:USERPROFILE\go\bin"
+
+      - run: go install github.com/wailsapp/wails/v3/cmd/wails3@latest
+      - run: cd frontend && npm ci
+      - run: wails3 build
+
+      - name: Zip binary
+        shell: pwsh
+        run: Compress-Archive -Path bin\freesurf.exe -DestinationPath bin\freesurf-windows-amd64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: bin/freesurf-windows-amd64.zip
+
+  build-linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libgtk-4-dev \
+            libwebkitgtk-6.0-dev
+
+      - uses: actions/setup-go@v5
+        with: { go-version: '1.25' }
+
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+
+      - name: Add Go bin to PATH
+        run: echo "$HOME/go/bin" >> $GITHUB_PATH
+
+      - run: go install github.com/wailsapp/wails/v3/cmd/wails3@latest
+      - run: cd frontend && npm ci
+      - run: wails3 build
+
+      - run: tar -czf bin/freesurf-linux-amd64.tar.gz -C bin freesurf
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: bin/freesurf-linux-amd64.tar.gz
+
+  release:
+    needs: [build-macos, build-windows, build-linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: artifacts }
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          generate_release_notes: true
