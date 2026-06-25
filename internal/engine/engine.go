@@ -149,7 +149,7 @@ func (e *Engine) Connect(node *store.Node) (ConnState, error) {
 	if err != nil {
 		return e.fail(node.ID, err)
 	}
-	cfg, err := proxy.WriteSingboxConfig()
+	cfg, err := proxy.WriteSingboxConfig(node)
 	if err != nil {
 		return e.fail(node.ID, err)
 	}

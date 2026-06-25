@@ -39,7 +39,7 @@ const (
 
 	// Bump when the service definition or supervisor behaviour changes to force a
 	// one-time reinstall.
-	helperVersion = "1"
+	helperVersion = "2"
 
 	// Internal flags handled by MaybeRunService before the GUI starts.
 	flagRunService       = "--freesurf-tun-service"
@@ -105,6 +105,33 @@ func HelperInstalled() bool {
 	return true
 }
 
+// serviceRunning reports whether the tunnel service is currently in the running
+// state. Opens read-only, so it works without elevation. A stopped service can't
+// supervise the tunnel, so EnsureHelper treats this as "needs (re)install".
+func serviceRunning() bool {
+	scm, err := windows.OpenSCManager(nil, nil, windows.SC_MANAGER_CONNECT)
+	if err != nil {
+		return false
+	}
+	defer windows.CloseServiceHandle(scm)
+
+	namePtr, err := windows.UTF16PtrFromString(serviceName)
+	if err != nil {
+		return false
+	}
+	h, err := windows.OpenService(scm, namePtr, windows.SERVICE_QUERY_STATUS)
+	if err != nil {
+		return false
+	}
+	defer windows.CloseServiceHandle(h)
+
+	var st windows.SERVICE_STATUS
+	if err := windows.QueryServiceStatus(h, &st); err != nil {
+		return false
+	}
+	return st.CurrentState == windows.SERVICE_RUNNING
+}
+
 // EnsureHelper installs/updates the service if needed, prompting for elevation (a
 // single UAC dialog) only when an install/update is actually required.
 func EnsureHelper(singboxBin string) error {
@@ -112,7 +139,7 @@ func EnsureHelper(singboxBin string) error {
 	if err != nil {
 		return err
 	}
-	if HelperInstalled() && installedMarker() == want {
+	if HelperInstalled() && installedMarker() == want && serviceRunning() {
 		return nil
 	}
 
@@ -200,6 +227,15 @@ func installServiceWorker(args []string) error {
 		return err
 	}
 	defer s.Close()
+
+	// Auto-restart if the supervisor process ever dies, so the tunnel survives a
+	// crash without another elevation prompt (the Windows analogue of launchd
+	// KeepAlive). Reset the failure counter after an hour of healthy running.
+	_ = s.SetRecoveryActions([]mgr.RecoveryAction{
+		{Type: mgr.ServiceRestart, Delay: 5 * time.Second},
+		{Type: mgr.ServiceRestart, Delay: 5 * time.Second},
+		{Type: mgr.ServiceRestart, Delay: 30 * time.Second},
+	}, 3600)
 
 	if err := writeMarker(); err != nil {
 		return err

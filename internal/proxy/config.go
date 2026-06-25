@@ -3,6 +3,7 @@ package proxy
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"runtime"
@@ -34,12 +35,70 @@ func xrayProcessName() string {
 	return paths.XrayName
 }
 
-// WriteSingboxConfig writes the node-independent sing-box config (TUN in → local
-// SOCKS out to Xray) and returns its path. Node-specific details live in the Xray
-// config. Xray's own traffic to the real server is matched by process name and
-// sent out directly, which breaks the routing loop.
-func WriteSingboxConfig() (string, error) {
+// serverDirectRule returns a route rule that sends traffic to the proxy server's
+// IP(s) out directly, so Xray's connection to the server isn't captured back into
+// the TUN. The host is resolved here (before the tunnel is up, so normal DNS
+// works); a literal IP is used as-is. Returns nil if the host can't be determined.
+func serverDirectRule(node *store.Node) map[string]any {
+	host := serverHostOf(node)
+	if host == "" {
+		return nil
+	}
+
+	var cidrs []any
+	if ip := net.ParseIP(host); ip != nil {
+		cidrs = append(cidrs, ipToCIDR(ip))
+	} else if ips, err := net.LookupIP(host); err == nil {
+		for _, ip := range ips {
+			cidrs = append(cidrs, ipToCIDR(ip))
+		}
+	}
+	if len(cidrs) == 0 {
+		return nil
+	}
+	return map[string]any{"ip_cidr": cidrs, "outbound": "direct"}
+}
+
+// serverHostOf extracts the proxy server host from the node's share URI.
+func serverHostOf(node *store.Node) string {
+	if node == nil {
+		return ""
+	}
+	u, err := url.Parse(node.URI)
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
+}
+
+func ipToCIDR(ip net.IP) string {
+	if ip.To4() != nil {
+		return ip.String() + "/32"
+	}
+	return ip.String() + "/128"
+}
+
+// WriteSingboxConfig writes the sing-box config (TUN in → local SOCKS out to Xray)
+// and returns its path. The proxy protocol details live in the Xray config; here
+// we only need the node to learn the proxy server's address so Xray's own traffic
+// to it can be routed out directly, breaking the routing loop.
+func WriteSingboxConfig(node *store.Node) (string, error) {
 	stack, strictRoute := tunOptions()
+
+	// Break the routing loop: Xray's connection to the proxy server must go out
+	// directly, not back through the TUN. process_name handles this on macOS but is
+	// unreliable on Windows (sing-box runs as a service and can't attribute Xray's
+	// process), so we also exclude the server address by IP.
+	routeRules := []any{
+		map[string]any{"inbound": "tun-in", "action": "sniff"},
+		map[string]any{"protocol": "dns", "action": "hijack-dns"},
+		map[string]any{"process_name": []any{xrayProcessName()}, "outbound": "direct"},
+		map[string]any{"ip_is_private": true, "outbound": "direct"},
+	}
+	if rule := serverDirectRule(node); rule != nil {
+		routeRules = append([]any{rule}, routeRules...)
+	}
+
 	cfg := map[string]any{
 		// No "output": the privileged helper redirects sing-box's stderr to the log
 		// file, so we don't also open it from inside the core.
@@ -71,12 +130,7 @@ func WriteSingboxConfig() (string, error) {
 			"default_domain_resolver": "local-dns",
 			"auto_detect_interface":   true,
 			"final":                   "proxy",
-			"rules": []any{
-				map[string]any{"inbound": "tun-in", "action": "sniff"},
-				map[string]any{"protocol": "dns", "action": "hijack-dns"},
-				map[string]any{"process_name": []any{xrayProcessName()}, "outbound": "direct"},
-				map[string]any{"ip_is_private": true, "outbound": "direct"},
-			},
+			"rules":                   routeRules,
 		},
 	}
 	return writeJSON(cfg, paths.Config)
