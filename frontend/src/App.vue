@@ -76,7 +76,7 @@
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useServerStore } from './stores/serverStore.js'
-import { OpenLogsWindow } from '../bindings/free-surf/app.js'
+import { OpenLogsWindow } from '../bindings/freesurf/app.js'
 import ServerItem from './components/ServerItem.vue'
 
 const store = useServerStore()

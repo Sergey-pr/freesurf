@@ -1,4 +1,4 @@
-package main
+package store
 
 import (
 	"database/sql"
@@ -17,8 +17,7 @@ const (
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
 
-// migrateDB migrates the database with dbmate-style migrations, kept inline to avoid
-// pulling in CGO (which dbmate requires).
+// migrateDB applies dbmate-style migrations inline (dbmate itself needs CGO).
 func migrateDB(db *sql.DB) error {
 	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
 		version TEXT PRIMARY KEY,
@@ -48,7 +47,6 @@ func migrateDB(db *sql.DB) error {
 		if err != nil {
 			return fmt.Errorf("read migration %s: %w", version, err)
 		}
-
 		up := extractUp(string(data))
 		if up == "" {
 			continue
@@ -70,11 +68,10 @@ func migrateDB(db *sql.DB) error {
 			return fmt.Errorf("commit migration %s: %w", version, err)
 		}
 	}
-
 	return nil
 }
 
-// extractUp returns the SQL between "-- migrate:up" and "-- migrate:down".
+// extractUp returns the SQL between the up and down markers.
 func extractUp(content string) string {
 	start := strings.Index(content, migrateUpAtom)
 	if start == -1 {

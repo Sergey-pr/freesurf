@@ -14,7 +14,7 @@
 <script setup>
 import { ref, onMounted, onUnmounted, nextTick } from 'vue'
 import { Events } from '@wailsio/runtime'
-import { GetLog, ClearLog } from '../bindings/free-surf/app.js'
+import { GetLog, ClearLog } from '../bindings/freesurf/app.js'
 
 const text = ref('')
 const copied = ref(false)

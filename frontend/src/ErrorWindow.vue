@@ -9,7 +9,7 @@
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue'
 import { Events } from '@wailsio/runtime'
-import { CloseErrorWindow } from '../bindings/free-surf/app.js'
+import { CloseErrorWindow } from '../bindings/freesurf/app.js'
 
 const message = ref('')
 

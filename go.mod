@@ -1,4 +1,4 @@
-module free-surf
+module freesurf
 
 go 1.25.0
 

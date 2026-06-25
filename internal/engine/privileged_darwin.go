@@ -1,6 +1,6 @@
 //go:build darwin
 
-package main
+package engine
 
 import (
 	"fmt"
@@ -8,18 +8,21 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"freesurf/internal/paths"
+	"freesurf/internal/proxy"
 )
 
 // macOS runs the TUN core (which needs root) via a launchd LaunchDaemon installed
-// once. The daemon is a small root *supervisor* shell loop that starts/stops
-// sing-box based on the sentinel file: while the sentinel exists it keeps sing-box
-// running (restarting it if it crashes); remove the sentinel and the supervisor
-// kills sing-box within ~1s — restoring routing. So after the one-time install (a
-// single password prompt) the app starts/stops the tunnel by creating/removing a
-// file: no CGO, no further prompts, even across app restarts and reboots.
+// once. The daemon is a small root supervisor loop that starts/stops sing-box
+// based on the sentinel file: while the sentinel exists it keeps sing-box running
+// (restarting it on crash); remove the sentinel and the supervisor kills sing-box
+// within ~1s, restoring routing. So after the one-time install (a single password
+// prompt) the app starts/stops the tunnel by creating/removing a file - no CGO,
+// no further prompts, even across app restarts and reboots.
 //
-// (launchd's own KeepAlive/PathState only governs *restart*, not stopping a
-// running job, which is why we supervise sing-box ourselves.)
+// (launchd's own KeepAlive/PathState only governs restart, not stopping a running
+// job, which is why we supervise sing-box ourselves.)
 const (
 	helperLabel      = "com.freesurf.helper"
 	helperPlistPath  = "/Library/LaunchDaemons/com.freesurf.helper.plist"
@@ -33,17 +36,14 @@ const (
 	helperVersion = "2"
 )
 
-func helperInstalled() bool {
+func HelperInstalled() bool {
 	_, err := os.Stat(helperPlistPath)
 	return err == nil
 }
 
 func rootSingboxVersionOK() bool {
 	out, err := exec.Command(rootSingboxPath, "version").CombinedOutput()
-	if err != nil {
-		return false
-	}
-	return strings.Contains(string(out), requiredCoreVersion)
+	return err == nil && strings.Contains(string(out), proxy.RequiredCoreVersion)
 }
 
 func installedHelperVersion() string {
@@ -54,26 +54,26 @@ func installedHelperVersion() string {
 	return strings.TrimSpace(string(data))
 }
 
-// ensureHelper installs/updates the privileged supervisor if needed. It only
-// prompts for a password when an install/update is actually required.
-func ensureHelper(singboxBin string) error {
-	if helperInstalled() && rootSingboxVersionOK() && installedHelperVersion() == helperVersion {
+// EnsureHelper installs/updates the privileged supervisor if needed, prompting for
+// a password only when an install/update is actually required.
+func EnsureHelper(singboxBin string) error {
+	if HelperInstalled() && rootSingboxVersionOK() && installedHelperVersion() == helperVersion {
 		return nil
 	}
 
-	cfgPath, err := configPath()
+	cfgPath, err := paths.Config()
 	if err != nil {
 		return err
 	}
-	logPath, err := coreLogPath()
+	logPath, err := paths.CoreLog()
 	if err != nil {
 		return err
 	}
-	sentinel, err := sentinelPath()
+	sentinel, err := paths.Sentinel()
 	if err != nil {
 		return err
 	}
-	dir, err := appDataDir()
+	dir, err := paths.Data()
 	if err != nil {
 		return err
 	}
@@ -104,8 +104,8 @@ func ensureHelper(singboxBin string) error {
 	return runOsascriptAdmin(script)
 }
 
-// uninstallHelper removes the LaunchDaemon and its files (one password prompt).
-func uninstallHelper() error {
+// UninstallHelper removes the LaunchDaemon and its files (one password prompt).
+func UninstallHelper() error {
 	script := strings.Join([]string{
 		"(launchctl bootout system " + shq(helperPlistPath) + " 2>/dev/null || true)",
 		"rm -f " + shq(helperPlistPath),
@@ -114,8 +114,8 @@ func uninstallHelper() error {
 	return runOsascriptAdmin(script)
 }
 
-// buildSupervisor returns the root supervisor shell loop: it keeps sing-box
-// running while the sentinel exists and kills it when the sentinel is removed.
+// buildSupervisor returns the root supervisor loop: keep sing-box running while
+// the sentinel exists, kill it when the sentinel is removed.
 func buildSupervisor(singbox, cfgPath, logPath, sentinel string) string {
 	return fmt.Sprintf(`#!/bin/sh
 CORE=""
@@ -159,7 +159,7 @@ func buildHelperPlist() string {
 
 // runOsascriptAdmin runs a /bin/sh command line as root via one GUI auth prompt.
 func runOsascriptAdmin(shell string) error {
-	script := fmt.Sprintf("do shell script %s with administrator privileges", appleScriptQuote(shell))
+	script := "do shell script " + appleScriptQuote(shell) + " with administrator privileges"
 	out, err := exec.Command("osascript", "-e", script).CombinedOutput()
 	if err != nil {
 		msg := strings.TrimSpace(string(out))

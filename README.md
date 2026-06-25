@@ -82,17 +82,17 @@ State is stored in SQLite at:
 
 ## Roadmap
 
-1. ~~**sing-box engine**~~ — done for macOS (download/pin core, generate TUN
+1. ~~**sing-box engine**~~ - done for macOS (download/pin core, generate TUN
    `config.json`, validate, run with privileges, real connect/disconnect).
-2. **Linux & Windows TUN** — privilege elevation (pkexec/sudo on Linux; runas +
+2. **Linux & Windows TUN** - privilege elevation (pkexec/sudo on Linux; runas +
    `wintun.dll` on Windows). Currently macOS-only; other platforms return a clear
    "not yet supported" error.
-3. ~~**Subscription fetching**~~ — done. Paste a subscription URL or a Happ
+3. ~~**Subscription fetching**~~ - done. Paste a subscription URL or a Happ
    `happ://crypt5/…` deep link (decrypted locally, then fetched with the Happ
    `User-Agent` + a stable `X-Hwid`); servers are imported as collapsible nodes.
-4. **More protocols** — decode VMess / Trojan / Shadowsocks / Hysteria2 / TUIC /
+4. **More protocols** - decode VMess / Trojan / Shadowsocks / Hysteria2 / TUIC /
    WireGuard (currently VLESS only) and Happ crypt1–4 links (crypt5 only so far).
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT - see [LICENSE](LICENSE).

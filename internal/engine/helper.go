@@ -1,16 +1,18 @@
-package main
+package engine
 
 import (
 	"fmt"
 	"os"
 	"strings"
 	"time"
+
+	"freesurf/internal/paths"
 )
 
 // startTunnel signals the privileged helper to bring the tunnel up by creating the
-// sentinel file the LaunchDaemon watches. Pure Go, no privileges, no prompt.
+// sentinel file it watches. Pure Go, no privileges, no prompt.
 func startTunnel() error {
-	sp, err := sentinelPath()
+	sp, err := paths.Sentinel()
 	if err != nil {
 		return err
 	}
@@ -19,13 +21,17 @@ func startTunnel() error {
 
 // stopTunnel signals the helper to stop by removing the sentinel file.
 func stopTunnel() {
-	if sp, err := sentinelPath(); err == nil {
+	if sp, err := paths.Sentinel(); err == nil {
 		_ = os.Remove(sp)
 	}
 }
 
-// waitTunnelUp polls the core log until sing-box reports it started, or a fatal
-// error appears, or the timeout elapses.
+// ClearSentinel removes the run flag so the tunnel is down - used at startup to
+// recover from a stale sentinel left by a previous crash.
+func ClearSentinel() { stopTunnel() }
+
+// waitTunnelUp polls the core log until sing-box reports it started, a fatal error
+// appears, or the timeout elapses.
 func waitTunnelUp(logPath string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
@@ -34,7 +40,6 @@ func waitTunnelUp(logPath string, timeout time.Duration) error {
 		if line := firstMatch(s, "FATAL"); line != "" {
 			return fmt.Errorf("sing-box failed to start: %s", line)
 		}
-		// Either the startup banner or the TUN coming up means we're live.
 		if strings.Contains(s, "sing-box started") || strings.Contains(s, "started at utun") || strings.Contains(s, "started at tun") {
 			return nil
 		}
@@ -43,7 +48,6 @@ func waitTunnelUp(logPath string, timeout time.Duration) error {
 	return fmt.Errorf("timed out waiting for the tunnel to come up (see logs)")
 }
 
-// firstMatch returns the first line containing sub, trimmed, or "".
 func firstMatch(text, sub string) string {
 	for _, line := range strings.Split(text, "\n") {
 		if strings.Contains(line, sub) {

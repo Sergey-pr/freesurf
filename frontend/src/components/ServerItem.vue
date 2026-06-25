@@ -63,7 +63,7 @@
     </div>
 
     <div v-else-if="!hasNodes" class="node-empty">
-      No nodes yet — they appear after the subscription is fetched.
+      No nodes yet - they appear after the subscription is fetched.
     </div>
   </div>
 </template>

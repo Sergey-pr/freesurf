@@ -1,4 +1,4 @@
-package main
+package store
 
 import (
 	"fmt"
@@ -9,7 +9,7 @@ import (
 
 // Server kinds.
 const (
-	KindSubscription = "subscription" // imported from a subscription URL or a multi-node paste
+	KindSubscription = "subscription" // a subscription URL or a multi-node paste
 	KindManual       = "manual"       // a single pasted share URI
 )
 
@@ -29,7 +29,7 @@ type ServerWithNodes struct {
 	Nodes []Node `json:"nodes"`
 }
 
-// GetServers returns all servers (oldest first) each with its nodes attached.
+// GetServers returns all servers (oldest first), each with its nodes attached.
 func GetServers() ([]ServerWithNodes, error) {
 	var servers []Server
 	if err := goquDB.From(serverTable).
@@ -49,12 +49,9 @@ func GetServers() ([]ServerWithNodes, error) {
 	return result, nil
 }
 
-// GetServerByID returns the server with the given id, or an error if not found.
 func GetServerByID(id int64) (*Server, error) {
 	var s Server
-	found, err := goquDB.From(serverTable).
-		Where(goqu.C("id").Eq(id)).
-		ScanStruct(&s)
+	found, err := goquDB.From(serverTable).Where(goqu.C("id").Eq(id)).ScanStruct(&s)
 	if err != nil {
 		return nil, err
 	}
@@ -75,17 +72,12 @@ func (s *Server) Save() error {
 		s.ID, err = result.LastInsertId()
 		return err
 	}
-	_, err := goquDB.Update(serverTable).
-		Set(s).
-		Where(goqu.C("id").Eq(s.ID)).
-		Executor().Exec()
+	_, err := goquDB.Update(serverTable).Set(s).Where(goqu.C("id").Eq(s.ID)).Executor().Exec()
 	return err
 }
 
 // Delete removes the server. Child nodes are removed via ON DELETE CASCADE.
 func (s *Server) Delete() error {
-	_, err := goquDB.Delete(serverTable).
-		Where(goqu.C("id").Eq(s.ID)).
-		Executor().Exec()
+	_, err := goquDB.Delete(serverTable).Where(goqu.C("id").Eq(s.ID)).Executor().Exec()
 	return err
 }

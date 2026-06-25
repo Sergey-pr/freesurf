@@ -1,4 +1,7 @@
-package main
+// Package engine owns the VPN lifecycle: it generates configs, runs the
+// unprivileged Xray backend, and drives the privileged sing-box TUN via the
+// platform helper.
+package engine
 
 import (
 	"bufio"
@@ -11,6 +14,10 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"freesurf/internal/paths"
+	"freesurf/internal/proxy"
+	"freesurf/internal/store"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
@@ -31,8 +38,7 @@ type ConnState struct {
 
 const logBufferMax = 800
 
-// Engine owns the sing-box lifecycle: downloading the core, generating the
-// config, and supervising the privileged TUN process.
+// Engine runs the Xray backend and drives the privileged sing-box TUN.
 type Engine struct {
 	mu      sync.Mutex
 	conn    ConnState
@@ -43,11 +49,11 @@ type Engine struct {
 	logBuf []string
 }
 
-func newEngine() *Engine {
+func New() *Engine {
 	return &Engine{conn: ConnState{Status: StatusDisconnected}}
 }
 
-func (e *Engine) state() ConnState {
+func (e *Engine) State() ConnState {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.conn
@@ -63,7 +69,7 @@ func (e *Engine) setState(s ConnState) {
 // logf appends a timestamped line to the in-memory log buffer and emits it so any
 // open logs window updates live.
 func (e *Engine) logf(format string, args ...any) {
-	line := fmt.Sprintf("%s  %s", time.Now().Format("15:04:05"), fmt.Sprintf(format, args...))
+	line := time.Now().Format("15:04:05") + "  " + fmt.Sprintf(format, args...)
 	e.logMu.Lock()
 	e.logBuf = append(e.logBuf, line)
 	if len(e.logBuf) > logBufferMax {
@@ -73,85 +79,82 @@ func (e *Engine) logf(format string, args ...any) {
 	application.Get().Event.Emit("log:line", line)
 }
 
-// logText returns the full log buffer as a single string.
-func (e *Engine) logText() string {
+// LogText returns the full log buffer as a single string.
+func (e *Engine) LogText() string {
 	e.logMu.Lock()
 	defer e.logMu.Unlock()
 	return strings.Join(e.logBuf, "\n")
 }
 
-func (e *Engine) clearLog() {
+func (e *Engine) ClearLog() {
 	e.logMu.Lock()
 	e.logBuf = nil
 	e.logMu.Unlock()
 	application.Get().Event.Emit("log:cleared")
 }
 
-// connect brings up the tunnel to the given node. It reports progress through the
-// "vpn:state" event and returns the final state. The returned error (if any) is
-// for the caller to surface; the state is already emitted.
-func (e *Engine) connect(node *Node) (ConnState, error) {
+// Connect brings up the tunnel to the given node, reporting progress through the
+// "vpn:state" event. The returned error (if any) is for the caller to surface;
+// the state is already emitted.
+func (e *Engine) Connect(node *store.Node) (ConnState, error) {
 	e.logf("Connecting to %q…", node.Name)
 	e.setState(ConnState{Status: StatusConnecting, NodeID: node.ID, Message: "Preparing core…"})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
 	defer cancel()
 
-	e.logf("Ensuring cores (sing-box %s, xray %s)…", requiredCoreVersion, requiredXrayVersion)
-	bin, err := ensureCore(ctx)
+	e.logf("Ensuring cores (sing-box %s, xray %s)…", proxy.RequiredCoreVersion, proxy.RequiredXrayVersion)
+	bin, err := proxy.EnsureCore(ctx)
 	if err != nil {
 		return e.fail(node.ID, err)
 	}
-	xrayBin, err := ensureXray(ctx)
+	xrayBin, err := proxy.EnsureXray(ctx)
 	if err != nil {
 		return e.fail(node.ID, err)
 	}
 
 	e.setState(ConnState{Status: StatusConnecting, NodeID: node.ID, Message: "Building config…"})
 	e.logf("Generating configs…")
-	xrayCfg, err := writeXrayConfig(node)
+	xrayCfg, err := proxy.WriteXrayConfig(node)
 	if err != nil {
 		return e.fail(node.ID, err)
 	}
-	cfg, err := writeSingboxConfig(xraySocksPort)
+	cfg, err := proxy.WriteSingboxConfig()
 	if err != nil {
 		return e.fail(node.ID, err)
 	}
-	if err := checkConfig(bin, cfg); err != nil {
+	if err := proxy.CheckConfig(bin, cfg); err != nil {
 		return e.fail(node.ID, err)
 	}
 	e.logf("Config OK (sing-box check passed).")
 
-	// Install / update the privileged helper if needed. This is the only step
-	// that may prompt for a password, and only the first time (or after a core
-	// version bump).
+	// Install/update the privileged helper if needed - the only step that may
+	// prompt for a password, and only the first time (or after a core bump).
 	e.setState(ConnState{Status: StatusConnecting, NodeID: node.ID, Message: "Preparing helper…"})
-	if !helperInstalled() {
+	if !HelperInstalled() {
 		e.logf("Installing privileged helper (one-time, asks for password)…")
 	}
-	if err := ensureHelper(bin); err != nil {
+	if err := EnsureHelper(bin); err != nil {
 		return e.fail(node.ID, err)
 	}
 
 	// Start Xray (unprivileged) first so its SOCKS port is ready for sing-box.
-	xrayLog, err := xrayLogPath()
+	xrayLog, err := paths.XrayLog()
 	if err != nil {
 		return e.fail(node.ID, err)
 	}
 	e.logf("Starting Xray (proxy backend)…")
-	xrayCmd, err := runXray(xrayBin, xrayCfg, xrayLog)
+	xrayCmd, err := proxy.RunXray(xrayBin, xrayCfg, xrayLog)
 	if err != nil {
 		return e.fail(node.ID, err)
 	}
 
-	logPath, err := coreLogPath()
+	logPath, err := paths.CoreLog()
 	if err != nil {
 		e.stopXray(xrayCmd)
 		return e.fail(node.ID, err)
 	}
-	// Start fresh: the log dir is user-owned, so we can drop the (root-written)
-	// log even though its file is root-owned.
-	_ = os.Remove(logPath)
+	_ = os.Remove(logPath) // start with a fresh log
 
 	e.setState(ConnState{Status: StatusConnecting, NodeID: node.ID, Message: "Starting tunnel…"})
 	e.logf("Starting tunnel…")
@@ -182,32 +185,25 @@ func (e *Engine) connect(node *Node) (ConnState, error) {
 
 func (e *Engine) fail(nodeID int64, err error) (ConnState, error) {
 	e.logf("ERROR: %v", err)
-	e.appendCoreLogTail()
-	e.appendXrayLogTail()
+	e.appendLogTail("sing-box.log", paths.CoreLog, "core")
+	e.appendLogTail("xray.log", paths.XrayLog, "xray")
 	state := ConnState{Status: StatusDisconnected, NodeID: nodeID, Message: err.Error()}
 	e.setState(state)
 	return state, err
 }
 
-// stopXray terminates the (unprivileged) Xray process if running.
 func (e *Engine) stopXray(cmd *exec.Cmd) {
-	if cmd == nil || cmd.Process == nil {
-		return
+	if cmd != nil && cmd.Process != nil {
+		_ = cmd.Process.Kill()
 	}
-	_ = cmd.Process.Kill()
 }
 
-// disconnect tears down the tunnel (user-initiated) and notifies the UI.
-func (e *Engine) disconnect() ConnState {
-	return e.teardown(true)
-}
+// Disconnect tears down the tunnel (user-initiated) and notifies the UI.
+func (e *Engine) Disconnect() ConnState { return e.teardown(true) }
 
-// shutdown tears down the tunnel on app exit without emitting events (the UI is
-// already going away). It must not block — stopping is just removing the
-// sentinel file, which the privileged core watches.
-func (e *Engine) shutdown() {
-	e.teardown(false)
-}
+// Shutdown tears down the tunnel on app exit without emitting events. It must not
+// block - stopping is just removing the sentinel file the helper watches.
+func (e *Engine) Shutdown() { e.teardown(false) }
 
 func (e *Engine) teardown(emit bool) ConnState {
 	e.mu.Lock()
@@ -220,9 +216,7 @@ func (e *Engine) teardown(emit bool) ConnState {
 	e.xrayCmd = nil
 	e.mu.Unlock()
 
-	// Removing the sentinel makes launchd stop the (root) core within ~1s — no
-	// privileged call, and therefore no password prompt, needed here.
-	stopTunnel()
+	stopTunnel() // helper stops the root core within ~1s; no prompt needed
 	e.stopXray(xrayCmd)
 	if had && emit {
 		e.logf("Stopping tunnel…")
@@ -239,8 +233,8 @@ func (e *Engine) teardown(emit bool) ConnState {
 }
 
 // monitor watches the Xray process and tears the tunnel down if it dies. The root
-// sing-box is supervised by launchd (auto-restarted while connected), so we only
-// watch the unprivileged half here.
+// sing-box is supervised by the helper (auto-restarted while connected), so we
+// only watch the unprivileged half here.
 func (e *Engine) monitor(stop chan struct{}) {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
@@ -250,8 +244,8 @@ func (e *Engine) monitor(stop chan struct{}) {
 			return
 		case <-ticker.C:
 			e.mu.Lock()
-			dead := e.xrayCmd == nil || e.xrayCmd.ProcessState != nil
 			xrayCmd := e.xrayCmd
+			dead := xrayCmd == nil || xrayCmd.ProcessState != nil
 			if dead {
 				e.xrayCmd = nil
 				e.stop = nil
@@ -263,18 +257,17 @@ func (e *Engine) monitor(stop chan struct{}) {
 			e.logf("Xray process exited unexpectedly.")
 			stopTunnel()
 			e.stopXray(xrayCmd)
-			e.appendCoreLogTail()
-			e.appendXrayLogTail()
-			e.setState(ConnState{Status: StatusDisconnected, Message: "Tunnel stopped — see logs"})
+			e.appendLogTail("sing-box.log", paths.CoreLog, "core")
+			e.appendLogTail("xray.log", paths.XrayLog, "xray")
+			e.setState(ConnState{Status: StatusDisconnected, Message: "Tunnel stopped - see logs"})
 			return
 		}
 	}
 }
 
-// appendCoreLogTail copies the last lines of sing-box.log into the log buffer so
-// the user can see why the core failed without opening a file.
-func (e *Engine) appendCoreLogTail() {
-	path, err := coreLogPath()
+// appendLogTail dumps the last lines of a core log into the log buffer.
+func (e *Engine) appendLogTail(name string, pathFn func() (string, error), prefix string) {
+	path, err := pathFn()
 	if err != nil {
 		return
 	}
@@ -282,28 +275,11 @@ func (e *Engine) appendCoreLogTail() {
 	if len(lines) == 0 {
 		return
 	}
-	e.logf("--- sing-box.log (tail) ---")
+	e.logf("--- %s (tail) ---", name)
 	for _, l := range lines {
-		e.logf("core: %s", l)
+		e.logf("%s: %s", prefix, l)
 	}
-	e.logf("--- end sing-box.log ---")
-}
-
-// appendXrayLogTail copies the last lines of xray.log into the log buffer.
-func (e *Engine) appendXrayLogTail() {
-	path, err := xrayLogPath()
-	if err != nil {
-		return
-	}
-	lines := tailLines(path, 30)
-	if len(lines) == 0 {
-		return
-	}
-	e.logf("--- xray.log (tail) ---")
-	for _, l := range lines {
-		e.logf("xray: %s", l)
-	}
-	e.logf("--- end xray.log ---")
+	e.logf("--- end %s ---", name)
 }
 
 // tailCore follows sing-box.log while the tunnel is up, streaming new complete
@@ -330,7 +306,7 @@ func (e *Engine) tailCore(path string, stop chan struct{}) {
 
 			nl := bytes.LastIndexByte(data, '\n')
 			if nl < 0 {
-				continue // no complete line yet
+				continue
 			}
 			offset += int64(nl) + 1
 			for _, line := range strings.Split(string(data[:nl]), "\n") {

@@ -1,4 +1,4 @@
-package main
+package subs
 
 import (
 	"context"
@@ -8,8 +8,8 @@ import (
 	"time"
 )
 
-// TestDecryptHappLink decrypts a real happ://crypt5/ link read from a file
-// (path in FREESURF_HAPP_FILE) so the subscription stays out of the repo.
+// TestDecryptHappLink decrypts a real happ://crypt5/ link read from a file (path
+// in FREESURF_HAPP_FILE) so the subscription stays out of the repo.
 //
 //	FREESURF_HAPP_FILE=/tmp/happ_link.txt go test -run TestDecryptHappLink -v
 func TestDecryptHappLink(t *testing.T) {
@@ -43,14 +43,11 @@ func TestHappEndToEnd(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 
-	parsed, err := buildImport(ctx, strings.TrimSpace(string(data)))
+	parsed, err := BuildImport(ctx, strings.TrimSpace(string(data)))
 	if err != nil {
-		t.Fatalf("buildImport: %v", err)
+		t.Fatalf("BuildImport: %v", err)
 	}
 	t.Logf("server %q (kind=%s) with %d nodes", parsed.Name, parsed.Kind, len(parsed.Nodes))
-	for _, n := range parsed.Nodes {
-		t.Logf("  - %-22s %s", n.Name, n.Protocol)
-	}
 	if len(parsed.Nodes) == 0 {
 		t.Fatal("expected at least one node")
 	}

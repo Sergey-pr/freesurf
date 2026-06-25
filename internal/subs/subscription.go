@@ -1,4 +1,4 @@
-package main
+package subs
 
 import (
 	"context"
@@ -12,6 +12,9 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"freesurf/internal/paths"
+	"freesurf/internal/store"
 )
 
 // Happ subscriptions gate on the official app's User-Agent and a per-device
@@ -22,7 +25,7 @@ const happUserAgent = "Happ/3.13.0"
 // happHWID returns a stable per-install device id, generating and persisting one
 // on first use so the provider counts this install as a single device.
 func happHWID() string {
-	if dir, err := appDataDir(); err == nil {
+	if dir, err := paths.Data(); err == nil {
 		p := filepath.Join(dir, "hwid")
 		if b, err := os.ReadFile(p); err == nil {
 			if id := strings.TrimSpace(string(b)); len(id) >= 16 {
@@ -45,8 +48,8 @@ func randomHex(n int) string {
 	return hex.EncodeToString(buf)
 }
 
-// fetchSubscription GETs a subscription URL with Happ headers and returns the raw body.
-func fetchSubscription(ctx context.Context, subURL string) (string, error) {
+// FetchSubscription GETs a subscription URL with Happ headers and returns the raw body.
+func FetchSubscription(ctx context.Context, subURL string) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, subURL, nil)
 	if err != nil {
 		return "", err
@@ -56,8 +59,7 @@ func fetchSubscription(ctx context.Context, subURL string) (string, error) {
 	req.Header.Set("X-Device-Os", "Android")
 	req.Header.Set("X-Device-Locale", "ru")
 
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -72,25 +74,20 @@ func fetchSubscription(ctx context.Context, subURL string) (string, error) {
 	return string(body), nil
 }
 
-// nodesFromBody parses a subscription body (base64 blob or plain text) into nodes.
-func nodesFromBody(body string) []Node {
+// NodesFromBody parses a subscription body (base64 blob or plain text) into nodes.
+func NodesFromBody(body string) []store.Node {
 	uris := collectURIs(nonEmptyLines(body))
 	if len(uris) == 0 {
 		if decoded, ok := tryBase64(body); ok {
 			uris = collectURIs(nonEmptyLines(decoded))
 		}
 	}
-	nodes := make([]Node, 0, len(uris))
-	for i, uri := range uris {
-		proto, name := describeURI(uri, i)
-		nodes = append(nodes, Node{Name: name, URI: uri, Protocol: proto, SortOrder: i})
-	}
-	return nodes
+	return nodesFromURIs(uris)
 }
 
-// buildImport turns pasted text into a server + nodes, fetching over the network
+// BuildImport turns pasted text into a server + nodes, fetching over the network
 // for Happ links and subscription URLs. Inline share URIs are handled offline.
-func buildImport(ctx context.Context, text string) (*parsedImport, error) {
+func BuildImport(ctx context.Context, text string) (*ParsedImport, error) {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return nil, ErrEmptyImport{}
@@ -112,31 +109,28 @@ func buildImport(ctx context.Context, text string) (*parsedImport, error) {
 		return importSubscription(ctx, lines[0], name)
 	}
 
-	// Inline content (one or more share URIs, possibly base64).
-	return parseImport(text)
+	return parseInline(text)
 }
 
-func importSubscription(ctx context.Context, subURL, name string) (*parsedImport, error) {
-	body, err := fetchSubscription(ctx, subURL)
+func importSubscription(ctx context.Context, subURL, name string) (*ParsedImport, error) {
+	body, err := FetchSubscription(ctx, subURL)
 	if err != nil {
 		return nil, err
 	}
-
-	nodes := nodesFromBody(body)
-	if isBlockedPlaceholder(nodes) {
+	nodes := NodesFromBody(body)
+	if IsBlockedPlaceholder(nodes) {
 		return nil, fmt.Errorf("the subscription server rejected this client (\"app not supported\")")
 	}
 	if len(nodes) == 0 {
 		return nil, fmt.Errorf("no servers found in the subscription")
 	}
-
 	u := subURL
-	return &parsedImport{Kind: KindSubscription, Name: name, URL: &u, Nodes: nodes}, nil
+	return &ParsedImport{Kind: store.KindSubscription, Name: name, URL: &u, Nodes: nodes}, nil
 }
 
-// isBlockedPlaceholder detects the provider's "app not supported" sentinel, which
-// is delivered as a single node pointing at the host "subscription.blocked".
-func isBlockedPlaceholder(nodes []Node) bool {
+// IsBlockedPlaceholder detects the provider's "app not supported" sentinel,
+// delivered as a node pointing at the host "subscription.blocked".
+func IsBlockedPlaceholder(nodes []store.Node) bool {
 	for _, n := range nodes {
 		if strings.Contains(n.URI, "subscription.blocked") {
 			return true

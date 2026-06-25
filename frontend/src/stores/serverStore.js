@@ -12,7 +12,7 @@ import {
   GetConnState,
   Connect,
   Disconnect,
-} from '../../bindings/free-surf/app.js'
+} from '../../bindings/freesurf/app.js'
 
 export const useServerStore = defineStore('servers', () => {
   const servers = ref([])

@@ -1,4 +1,4 @@
-package main
+package store
 
 import (
 	"fmt"
@@ -19,7 +19,7 @@ type Node struct {
 	CreatedAt time.Time `db:"created_at" json:"createdAt" goqu:"skipupdate"`
 }
 
-// GetNodesByServer returns the nodes of a server ordered by sort_order.
+// GetNodesByServer returns a server's nodes ordered by sort_order.
 func GetNodesByServer(serverID int64) ([]Node, error) {
 	var nodes []Node
 	err := goquDB.From(nodeTable).
@@ -32,20 +32,9 @@ func GetNodesByServer(serverID int64) ([]Node, error) {
 	return nodes, err
 }
 
-// DeleteNodesByServer removes all nodes belonging to a server.
-func DeleteNodesByServer(serverID int64) error {
-	_, err := goquDB.Delete(nodeTable).
-		Where(goqu.C("server_id").Eq(serverID)).
-		Executor().Exec()
-	return err
-}
-
-// GetNodeByID returns the node with the given id, or an error if not found.
 func GetNodeByID(id int64) (*Node, error) {
 	var n Node
-	found, err := goquDB.From(nodeTable).
-		Where(goqu.C("id").Eq(id)).
-		ScanStruct(&n)
+	found, err := goquDB.From(nodeTable).Where(goqu.C("id").Eq(id)).ScanStruct(&n)
 	if err != nil {
 		return nil, err
 	}
@@ -53,6 +42,12 @@ func GetNodeByID(id int64) (*Node, error) {
 		return nil, fmt.Errorf("node %d not found", id)
 	}
 	return &n, nil
+}
+
+// DeleteNodesByServer removes all nodes belonging to a server.
+func DeleteNodesByServer(serverID int64) error {
+	_, err := goquDB.Delete(nodeTable).Where(goqu.C("server_id").Eq(serverID)).Executor().Exec()
+	return err
 }
 
 // Save inserts or updates the node. ID == 0 means a new record.
@@ -66,17 +61,12 @@ func (n *Node) Save() error {
 		n.ID, err = result.LastInsertId()
 		return err
 	}
-	_, err := goquDB.Update(nodeTable).
-		Set(n).
-		Where(goqu.C("id").Eq(n.ID)).
-		Executor().Exec()
+	_, err := goquDB.Update(nodeTable).Set(n).Where(goqu.C("id").Eq(n.ID)).Executor().Exec()
 	return err
 }
 
 // Delete removes the node from the database.
 func (n *Node) Delete() error {
-	_, err := goquDB.Delete(nodeTable).
-		Where(goqu.C("id").Eq(n.ID)).
-		Executor().Exec()
+	_, err := goquDB.Delete(nodeTable).Where(goqu.C("id").Eq(n.ID)).Executor().Exec()
 	return err
 }

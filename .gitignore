@@ -1,7 +1,7 @@
 bin/
 build/bin/
-free-surf
-free-surf.exe
+freesurf
+freesurf.exe
 
 *.test
 *.out

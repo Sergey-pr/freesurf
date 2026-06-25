@@ -1,9 +1,10 @@
-package main
+// Package store is FreeSurf's SQLite persistence layer: servers and their nodes.
+package store
 
 import (
 	"database/sql"
-	"os"
-	"path/filepath"
+
+	"freesurf/internal/paths"
 
 	"github.com/doug-martin/goqu/v9"
 	_ "github.com/doug-martin/goqu/v9/dialect/sqlite3"
@@ -13,18 +14,12 @@ import (
 // goquDB is the shared database connection used by all model methods.
 var goquDB *goqu.Database
 
-func initDB() error {
-	configDir, err := os.UserConfigDir()
+// InitDB opens the database, applies migrations, and wires the shared connection.
+func InitDB() error {
+	dbPath, err := paths.DB()
 	if err != nil {
 		return err
 	}
-
-	dir := filepath.Join(configDir, "FreeSurf")
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return err
-	}
-
-	dbPath := filepath.Join(dir, "freesurf.db")
 
 	sqlDB, err := sql.Open("sqlite", dbPath)
 	if err != nil {
@@ -35,11 +30,9 @@ func initDB() error {
 	if _, err := sqlDB.Exec("PRAGMA foreign_keys = ON"); err != nil {
 		return err
 	}
-
 	if err := sqlDB.Ping(); err != nil {
 		return err
 	}
-
 	if err := migrateDB(sqlDB); err != nil {
 		return err
 	}

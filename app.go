@@ -5,28 +5,27 @@ import (
 	"fmt"
 	"time"
 
+	"freesurf/internal/engine"
+	"freesurf/internal/ping"
+	"freesurf/internal/store"
+	"freesurf/internal/subs"
+
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
+// App is the Wails service exposed to the frontend.
 type App struct {
 	errorWindow *application.WebviewWindow
 	logsWindow  *application.WebviewWindow
-	engine      *Engine
+	engine      *engine.Engine
 }
 
 func NewApp() *App {
-	return &App{engine: newEngine()}
+	return &App{engine: engine.New()}
 }
 
-// SetErrorWindow stores the error window reference (called from main before Run).
-func (a *App) SetErrorWindow(w *application.WebviewWindow) {
-	a.errorWindow = w
-}
-
-// SetLogsWindow stores the logs window reference (called from main before Run).
-func (a *App) SetLogsWindow(w *application.WebviewWindow) {
-	a.logsWindow = w
-}
+func (a *App) SetErrorWindow(w *application.WebviewWindow) { a.errorWindow = w }
+func (a *App) SetLogsWindow(w *application.WebviewWindow)  { a.logsWindow = w }
 
 func (a *App) showError(err error) {
 	if err == nil || a.errorWindow == nil {
@@ -36,91 +35,67 @@ func (a *App) showError(err error) {
 	a.errorWindow.Show()
 }
 
-// ServiceStartup is called by the Wails v3 service system when the app starts.
 func (a *App) ServiceStartup(_ context.Context, _ application.ServiceOptions) error {
-	// Drop any stale sentinel so we always start disconnected (and a left-over
-	// sentinel from a previous crash doesn't keep launchd running the tunnel).
-	stopTunnel()
-	return initDB()
+	engine.ClearSentinel() // always start disconnected
+	return store.InitDB()
 }
 
-// ServiceShutdown tears down the tunnel on app exit. It must return quickly —
-// stopping only removes the sentinel file, so no privilege prompt can block exit.
 func (a *App) ServiceShutdown() error {
-	a.engine.shutdown()
+	a.engine.Shutdown()
 	return nil
 }
 
-// UninstallHelper removes the privileged macOS LaunchDaemon (one password prompt).
+// UninstallHelper removes the privileged helper (one password prompt).
 func (a *App) UninstallHelper() bool {
-	if err := uninstallHelper(); err != nil {
+	if err := engine.UninstallHelper(); err != nil {
 		a.showError(err)
 		return false
 	}
 	return true
 }
 
-// HelperInstalled reports whether the privileged helper is installed.
-func (a *App) HelperInstalled() bool {
-	return helperInstalled()
-}
+func (a *App) HelperInstalled() bool { return engine.HelperInstalled() }
 
 // GetServers returns all servers, each with its nodes, for rendering the list.
-func (a *App) GetServers() []ServerWithNodes {
-	servers, err := GetServers()
+func (a *App) GetServers() []store.ServerWithNodes {
+	servers, err := store.GetServers()
 	if err != nil {
 		a.showError(err)
-		return []ServerWithNodes{}
+		return []store.ServerWithNodes{}
 	}
 	return servers
 }
 
-// AddFromClipboard reads the system clipboard, parses it into a server (plus
-// nodes), persists it and returns the created server. Returns nil on failure.
-func (a *App) AddFromClipboard() *ServerWithNodes {
+// AddFromClipboard imports a server (and nodes) from the system clipboard.
+func (a *App) AddFromClipboard() *store.ServerWithNodes {
 	text, ok := application.Get().Clipboard.Text()
 	if !ok || text == "" {
-		a.showError(ErrEmptyImport{})
+		a.showError(subs.ErrEmptyImport{})
 		return nil
 	}
-	return a.addFromText(text)
-}
 
-func (a *App) addFromText(text string) *ServerWithNodes {
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 
-	parsed, err := buildImport(ctx, text)
+	parsed, err := subs.BuildImport(ctx, text)
 	if err != nil {
 		a.showError(err)
 		return nil
 	}
 
-	server := &Server{Name: parsed.Name, Kind: parsed.Kind, URL: parsed.URL}
-	if err := server.Save(); err != nil {
+	server := &store.Server{Name: parsed.Name, Kind: parsed.Kind, URL: parsed.URL}
+	saved, err := a.saveServer(server, parsed.Nodes)
+	if err != nil {
 		a.showError(err)
 		return nil
 	}
-
-	saved := make([]Node, 0, len(parsed.Nodes))
-	for i := range parsed.Nodes {
-		n := parsed.Nodes[i]
-		n.ServerID = server.ID
-		if err := n.Save(); err != nil {
-			a.showError(err)
-			return nil
-		}
-		saved = append(saved, n)
-	}
-
-	result := &ServerWithNodes{Server: *server, Nodes: saved}
 	application.Get().Event.Emit("servers:changed")
-	return result
+	return saved
 }
 
 // RefreshServer re-fetches a subscription server's URL and replaces its nodes.
-func (a *App) RefreshServer(id int64) *ServerWithNodes {
-	server, err := GetServerByID(id)
+func (a *App) RefreshServer(id int64) *store.ServerWithNodes {
+	server, err := store.GetServerByID(id)
 	if err != nil {
 		a.showError(err)
 		return nil
@@ -133,13 +108,13 @@ func (a *App) RefreshServer(id int64) *ServerWithNodes {
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 
-	body, err := fetchSubscription(ctx, *server.URL)
+	body, err := subs.FetchSubscription(ctx, *server.URL)
 	if err != nil {
 		a.showError(err)
 		return nil
 	}
-	nodes := nodesFromBody(body)
-	if isBlockedPlaceholder(nodes) {
+	nodes := subs.NodesFromBody(body)
+	if subs.IsBlockedPlaceholder(nodes) {
 		a.showError(fmt.Errorf("the subscription server rejected this client (\"app not supported\")"))
 		return nil
 	}
@@ -148,48 +123,62 @@ func (a *App) RefreshServer(id int64) *ServerWithNodes {
 		return nil
 	}
 
-	if err := DeleteNodesByServer(id); err != nil {
+	if err := store.DeleteNodesByServer(id); err != nil {
 		a.showError(err)
 		return nil
 	}
-	saved := make([]Node, 0, len(nodes))
+	saved, err := a.saveServer(server, nodes)
+	if err != nil {
+		a.showError(err)
+		return nil
+	}
+	application.Get().Event.Emit("servers:changed")
+	return saved
+}
+
+// saveServer inserts the server (if new) and its nodes, returning the combined view.
+func (a *App) saveServer(server *store.Server, nodes []store.Node) (*store.ServerWithNodes, error) {
+	if err := server.Save(); err != nil {
+		return nil, err
+	}
+	saved := make([]store.Node, 0, len(nodes))
 	for i := range nodes {
 		n := nodes[i]
-		n.ServerID = id
+		n.ServerID = server.ID
 		if err := n.Save(); err != nil {
-			a.showError(err)
-			return nil
+			return nil, err
 		}
 		saved = append(saved, n)
 	}
-
-	application.Get().Event.Emit("servers:changed")
-	return &ServerWithNodes{Server: *server, Nodes: saved}
+	return &store.ServerWithNodes{Server: *server, Nodes: saved}, nil
 }
 
 // PingNode returns the TCP connect latency (ms) to a node's server, or -1 on failure.
 func (a *App) PingNode(id int64) int {
-	node, err := GetNodeByID(id)
+	node, err := store.GetNodeByID(id)
 	if err != nil {
 		a.showError(err)
 		return -1
 	}
-	return pingNodeURI(node.URI)
+	return ping.URI(node.URI)
 }
 
-// PingServer pings all nodes of a server concurrently, returning nodeID → ms (-1 = fail).
+// PingServer pings all nodes of a server concurrently, returning nodeID → ms.
 func (a *App) PingServer(id int64) map[int64]int {
-	nodes, err := GetNodesByServer(id)
+	nodes, err := store.GetNodesByServer(id)
 	if err != nil {
 		a.showError(err)
 		return map[int64]int{}
 	}
-	return pingNodes(nodes)
+	uris := make(map[int64]string, len(nodes))
+	for _, n := range nodes {
+		uris[n.ID] = n.URI
+	}
+	return ping.All(uris)
 }
 
-// RenameServer updates a server's display name.
-func (a *App) RenameServer(id int64, name string) *Server {
-	server, err := GetServerByID(id)
+func (a *App) RenameServer(id int64, name string) *store.Server {
+	server, err := store.GetServerByID(id)
 	if err != nil {
 		a.showError(err)
 		return nil
@@ -203,10 +192,10 @@ func (a *App) RenameServer(id int64, name string) *Server {
 	return server
 }
 
-// DeleteServer removes a server and its nodes. If the active node belonged to it,
-// the tunnel is torn down.
+// DeleteServer removes a server and its nodes, dropping the connection if the
+// active node belonged to it.
 func (a *App) DeleteServer(id int64) bool {
-	server, err := GetServerByID(id)
+	server, err := store.GetServerByID(id)
 	if err != nil {
 		a.showError(err)
 		return false
@@ -216,10 +205,9 @@ func (a *App) DeleteServer(id int64) bool {
 		return false
 	}
 
-	// If the connected node no longer exists, drop the connection.
-	if st := a.engine.state(); st.Status != StatusDisconnected {
-		if _, err := GetNodeByID(st.NodeID); err != nil {
-			a.engine.disconnect()
+	if st := a.engine.State(); st.Status != engine.StatusDisconnected {
+		if _, err := store.GetNodeByID(st.NodeID); err != nil {
+			a.engine.Disconnect()
 		}
 	}
 
@@ -227,48 +215,33 @@ func (a *App) DeleteServer(id int64) bool {
 	return true
 }
 
-// GetConnState returns the current connection state.
-func (a *App) GetConnState() ConnState {
-	return a.engine.state()
-}
+func (a *App) GetConnState() engine.ConnState { return a.engine.State() }
 
 // Connect brings up the tunnel to the given node.
-func (a *App) Connect(nodeID int64) ConnState {
-	node, err := GetNodeByID(nodeID)
+func (a *App) Connect(nodeID int64) engine.ConnState {
+	node, err := store.GetNodeByID(nodeID)
 	if err != nil {
 		a.showError(err)
-		return a.engine.state()
+		return a.engine.State()
 	}
-	state, err := a.engine.connect(node)
+	state, err := a.engine.Connect(node)
 	if err != nil {
 		a.showError(err)
 	}
 	return state
 }
 
-// Disconnect tears down the active tunnel.
-func (a *App) Disconnect() ConnState {
-	return a.engine.disconnect()
-}
+func (a *App) Disconnect() engine.ConnState { return a.engine.Disconnect() }
 
-// CloseErrorWindow hides the error window.
 func (a *App) CloseErrorWindow() {
 	if a.errorWindow != nil {
 		a.errorWindow.Hide()
 	}
 }
 
-// GetLog returns the current engine log buffer as a single string.
-func (a *App) GetLog() string {
-	return a.engine.logText()
-}
+func (a *App) GetLog() string { return a.engine.LogText() }
+func (a *App) ClearLog()      { a.engine.ClearLog() }
 
-// ClearLog empties the engine log buffer.
-func (a *App) ClearLog() {
-	a.engine.clearLog()
-}
-
-// OpenLogsWindow shows (and focuses) the logs window.
 func (a *App) OpenLogsWindow() {
 	if a.logsWindow != nil {
 		a.logsWindow.Show()
@@ -276,7 +249,6 @@ func (a *App) OpenLogsWindow() {
 	}
 }
 
-// CloseLogsWindow hides the logs window.
 func (a *App) CloseLogsWindow() {
 	if a.logsWindow != nil {
 		a.logsWindow.Hide()
