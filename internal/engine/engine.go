@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -66,10 +67,39 @@ func (e *Engine) setState(s ConnState) {
 	application.Get().Event.Emit("vpn:state", s)
 }
 
+var (
+	// ANSI colour/style escape sequences emitted by sing-box.
+	ansiRe = regexp.MustCompile("\x1b\\[[0-9;]*[a-zA-Z]")
+	// Leading sing-box timestamp, e.g. "+0300 2026-06-25 11:46:08 ".
+	sbTimeRe = regexp.MustCompile(`^[+-]\d{4} \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\s+`)
+	// Per-connection id/duration token, e.g. "[4294882405 3ms] ".
+	sbConnRe = regexp.MustCompile(`\[\d+ [\d.]+[a-zµ]*s\]\s*`)
+)
+
+// sanitize removes ANSI escape sequences and other non-printable characters.
+func sanitize(s string) string {
+	s = ansiRe.ReplaceAllString(s, "")
+	return strings.Map(func(r rune) rune {
+		if r != '\t' && r < 0x20 {
+			return -1
+		}
+		return r
+	}, s)
+}
+
+// cleanCoreLine sanitizes a raw sing-box/xray log line and strips the redundant
+// inner timestamp and per-connection id token so identical events collapse.
+func cleanCoreLine(s string) string {
+	s = sanitize(s)
+	s = sbTimeRe.ReplaceAllString(s, "")
+	s = sbConnRe.ReplaceAllString(s, "")
+	return strings.TrimSpace(s)
+}
+
 // logf appends a timestamped line to the in-memory log buffer and emits it so any
 // open logs window updates live.
 func (e *Engine) logf(format string, args ...any) {
-	line := time.Now().Format("15:04:05") + "  " + fmt.Sprintf(format, args...)
+	line := time.Now().Format("15:04:05") + "  " + sanitize(fmt.Sprintf(format, args...))
 	e.logMu.Lock()
 	e.logBuf = append(e.logBuf, line)
 	if len(e.logBuf) > logBufferMax {
@@ -277,7 +307,9 @@ func (e *Engine) appendLogTail(name string, pathFn func() (string, error), prefi
 	}
 	e.logf("--- %s (tail) ---", name)
 	for _, l := range lines {
-		e.logf("%s: %s", prefix, l)
+		if cleaned := cleanCoreLine(l); cleaned != "" {
+			e.logf("%s: %s", prefix, cleaned)
+		}
 	}
 	e.logf("--- end %s ---", name)
 }
@@ -310,8 +342,8 @@ func (e *Engine) tailCore(path string, stop chan struct{}) {
 			}
 			offset += int64(nl) + 1
 			for _, line := range strings.Split(string(data[:nl]), "\n") {
-				if line = strings.TrimRight(line, "\r"); line != "" {
-					e.logf("core: %s", line)
+				if cleaned := cleanCoreLine(line); cleaned != "" {
+					e.logf("core: %s", cleaned)
 				}
 			}
 		}

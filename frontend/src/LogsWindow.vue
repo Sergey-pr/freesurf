@@ -7,7 +7,14 @@
         <button class="btn-ghost" @click="clear">Clear</button>
       </div>
     </div>
-    <pre ref="pane" class="logs-pane">{{ text || 'No log output yet. Press Start to connect.' }}</pre>
+    <div ref="pane" class="logs-pane">
+      <div v-if="!entries.length" class="logs-empty">No log output yet. Press Start to connect.</div>
+      <div v-for="e in entries" :key="e.key" class="logs-row">
+        <span class="logs-time">{{ e.time }}</span>
+        <span class="logs-msg">{{ e.msg }}</span>
+        <span v-if="e.count > 1" class="logs-count">×{{ e.count }}</span>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -16,10 +23,13 @@ import { ref, onMounted, onUnmounted, nextTick } from 'vue'
 import { Events } from '@wailsio/runtime'
 import { GetLog, ClearLog } from '../bindings/freesurf/app.js'
 
-const text = ref('')
+// entries holds one row per unique message; repeats bump the count and refresh
+// the timestamp instead of adding another line.
+const entries = ref([])
 const copied = ref(false)
 const pane = ref(null)
 let offLine, offCleared
+const byMsg = new Map() // msg text -> entry object
 
 function scrollToBottom() {
   nextTick(() => {
@@ -27,24 +37,51 @@ function scrollToBottom() {
   })
 }
 
-async function load() {
-  text.value = await GetLog()
-  scrollToBottom()
+function reset() {
+  entries.value = []
+  byMsg.clear()
 }
 
-function append(line) {
-  text.value = text.value ? text.value + '\n' + line : line
+// ingest folds a raw buffer line ("HH:MM:SS  message") into the grouped view.
+function ingest(line) {
+  const m = line.match(/^(\d{2}:\d{2}:\d{2})\s+([\s\S]*)$/)
+  const time = m ? m[1] : ''
+  const msg = m ? m[2] : line
+  const existing = byMsg.get(msg)
+  if (existing) {
+    existing.time = time
+    existing.count++
+    // Move the refreshed entry to the bottom so it reads newest-last.
+    const i = entries.value.indexOf(existing)
+    if (i !== -1 && i !== entries.value.length - 1) {
+      entries.value.splice(i, 1)
+      entries.value.push(existing)
+    }
+  } else {
+    const entry = { key: msg, msg, time, count: 1 }
+    byMsg.set(msg, entry)
+    entries.value.push(entry)
+  }
+}
+
+async function load() {
+  reset()
+  const text = await GetLog()
+  if (text) text.split('\n').forEach(ingest)
   scrollToBottom()
 }
 
 async function clear() {
   await ClearLog()
-  text.value = ''
+  reset()
 }
 
 async function copy() {
+  const text = entries.value
+    .map(e => `${e.time}  ${e.msg}${e.count > 1 ? `  (×${e.count})` : ''}`)
+    .join('\n')
   try {
-    await navigator.clipboard.writeText(text.value)
+    await navigator.clipboard.writeText(text)
     copied.value = true
     setTimeout(() => (copied.value = false), 1200)
   } catch (_) { /* clipboard may be unavailable */ }
@@ -52,8 +89,8 @@ async function copy() {
 
 onMounted(() => {
   load()
-  offLine = Events.On('log:line', ev => append(ev.data))
-  offCleared = Events.On('log:cleared', () => { text.value = '' })
+  offLine = Events.On('log:line', ev => { ingest(ev.data); scrollToBottom() })
+  offCleared = Events.On('log:cleared', reset)
 })
 
 onUnmounted(() => {
@@ -94,13 +131,44 @@ onUnmounted(() => {
 .logs-pane {
   flex: 1;
   margin: 0;
-  padding: 10px 12px;
+  padding: 6px 12px;
   overflow: auto;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 11.5px;
   line-height: 1.55;
   color: var(--text);
-  white-space: pre-wrap;
+}
+
+.logs-empty { color: var(--muted); padding: 4px 0; }
+
+.logs-row {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 1px 0;
   word-break: break-word;
+}
+
+.logs-time {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.logs-msg {
+  flex: 1;
+  white-space: pre-wrap;
+}
+
+.logs-count {
+  flex-shrink: 0;
+  align-self: center;
+  padding: 0 6px;
+  border-radius: 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
 }
 </style>
