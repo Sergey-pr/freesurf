@@ -102,6 +102,7 @@ func RunXray(binPath, cfgPath, logPath string) (*exec.Cmd, error) {
 	cmd := exec.Command(binPath, "run", "-c", cfgPath)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
+	cmd.SysProcAttr = hiddenProcAttr() // no console window on Windows
 	if err := cmd.Start(); err != nil {
 		logFile.Close()
 		return nil, err

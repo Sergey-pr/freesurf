@@ -3,6 +3,7 @@ package main
 import (
 	"embed"
 	"log"
+	"runtime"
 
 	"freesurf/internal/engine"
 
@@ -38,7 +39,7 @@ func main() {
 	})
 
 	// Main window
-	app.Window.NewWithOptions(application.WebviewWindowOptions{
+	mainWindow := app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:            "FreeSurf",
 		Width:            400,
 		Height:           600,
@@ -47,6 +48,15 @@ func main() {
 		BackgroundColour: application.NewRGB(0x12, 0x12, 0x14),
 		URL:              "/",
 	})
+	// On macOS ApplicationShouldTerminateAfterLastWindowClosed quits the app; on
+	// other platforms the hidden error/logs windows keep it alive, so closing the
+	// main window would leave the app (and the tunnel) running. Quit explicitly so
+	// ServiceShutdown tears the tunnel down.
+	if runtime.GOOS != "darwin" {
+		mainWindow.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
+			application.Get().Quit()
+		})
+	}
 
 	// Error window
 	errorWindow := app.Window.NewWithOptions(application.WebviewWindowOptions{
