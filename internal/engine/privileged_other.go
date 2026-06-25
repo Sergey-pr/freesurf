@@ -1,4 +1,4 @@
-//go:build !darwin
+//go:build !darwin && !windows
 
 package engine
 
@@ -7,10 +7,11 @@ import (
 	"runtime"
 )
 
-// The privileged TUN helper is implemented for macOS first (launchd LaunchDaemon).
-// Linux (systemd unit / pkexec) and Windows (a Windows service + UAC) are next -
-// both pure Go, no CGO. Tunnel start/stop (the sentinel file) is already
-// cross-platform in helper.go; only install/uninstall is platform-specific.
+// The privileged TUN helper is implemented for macOS (launchd LaunchDaemon) and
+// Windows (a native Go Windows service - see privileged_windows.go). Linux
+// (systemd unit / pkexec) is next - pure Go, no CGO. Tunnel start/stop (the
+// sentinel file) is already cross-platform in helper.go; only install/uninstall
+// is platform-specific.
 
 func HelperInstalled() bool { return false }
 

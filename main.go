@@ -4,6 +4,8 @@ import (
 	"embed"
 	"log"
 
+	"freesurf/internal/engine"
+
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
 )
@@ -12,6 +14,13 @@ import (
 var assets embed.FS
 
 func main() {
+	// On Windows the same binary doubles as the privileged TUN service and its
+	// elevated install/uninstall worker. When launched in one of those modes,
+	// handle it and exit before touching Wails. No-op elsewhere.
+	if engine.MaybeRunService() {
+		return
+	}
+
 	appService := NewApp()
 
 	app := application.New(application.Options{

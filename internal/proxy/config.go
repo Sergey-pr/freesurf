@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 
@@ -12,13 +13,35 @@ import (
 	"freesurf/internal/store"
 )
 
+// tunOptions returns the platform-tuned TUN stack and strict_route setting. On
+// macOS the system stack works and strict_route must stay off (true loops our own
+// outbound back into the TUN); on Windows the gvisor stack over Wintun with
+// strict_route on is the reliable combination and avoids route/DNS leaks.
+func tunOptions() (stack string, strictRoute bool) {
+	if runtime.GOOS == "windows" {
+		return "gvisor", true
+	}
+	return "system", false
+}
+
+// xrayProcessName is how sing-box's process_name rule sees the Xray process, used
+// to send Xray's own traffic to the server out directly (breaking the routing
+// loop). On Windows the process name includes the .exe suffix.
+func xrayProcessName() string {
+	if runtime.GOOS == "windows" {
+		return paths.XrayName + ".exe"
+	}
+	return paths.XrayName
+}
+
 // WriteSingboxConfig writes the node-independent sing-box config (TUN in → local
 // SOCKS out to Xray) and returns its path. Node-specific details live in the Xray
 // config. Xray's own traffic to the real server is matched by process name and
 // sent out directly, which breaks the routing loop.
 func WriteSingboxConfig() (string, error) {
+	stack, strictRoute := tunOptions()
 	cfg := map[string]any{
-		// No "output": the launchd daemon redirects sing-box's stderr to the log
+		// No "output": the privileged helper redirects sing-box's stderr to the log
 		// file, so we don't also open it from inside the core.
 		"log": map[string]any{"level": "info", "timestamp": true},
 		"dns": map[string]any{
@@ -36,8 +59,8 @@ func WriteSingboxConfig() (string, error) {
 				"address":      []any{"172.18.0.1/30"},
 				"mtu":          1492,
 				"auto_route":   true,
-				"strict_route": false, // on macOS, true loops our outbound back into the TUN
-				"stack":        "system",
+				"strict_route": strictRoute,
+				"stack":        stack,
 			},
 		},
 		"outbounds": []any{
@@ -51,7 +74,7 @@ func WriteSingboxConfig() (string, error) {
 			"rules": []any{
 				map[string]any{"inbound": "tun-in", "action": "sniff"},
 				map[string]any{"protocol": "dns", "action": "hijack-dns"},
-				map[string]any{"process_name": []any{paths.XrayName}, "outbound": "direct"},
+				map[string]any{"process_name": []any{xrayProcessName()}, "outbound": "direct"},
 				map[string]any{"ip_is_private": true, "outbound": "direct"},
 			},
 		},

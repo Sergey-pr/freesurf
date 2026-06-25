@@ -33,6 +33,10 @@ func EnsureCore(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// Windows needs the Wintun driver alongside sing-box; no-op elsewhere.
+	if err := EnsureWintun(ctx); err != nil {
+		return "", err
+	}
 	if coreVersionOK(path) {
 		return path, nil
 	}
