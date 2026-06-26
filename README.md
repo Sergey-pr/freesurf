@@ -49,6 +49,17 @@ The visual design and project layout follow the `timespan` app; the VPN concepts
 - **Wails v3 CLI**: `go install github.com/wailsapp/wails/v3/cmd/wails3@latest`
   (ensure `~/go/bin` is on your `PATH`)
 
+## Install (macOS)
+
+Release builds are ad-hoc signed but not notarized. After downloading and
+unzipping, macOS quarantines the app and refuses to open it with *"can't be
+opened because it may be damaged or incomplete"*. Strip the quarantine
+attribute once and it will launch:
+
+```sh
+xattr -dr com.apple.quarantine freesurf.app
+```
+
 ## Development
 
 ```sh
