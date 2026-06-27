@@ -65,12 +65,19 @@
             :selected-node-id="store.selectedNodeId"
             :active-node-id="store.isConnected ? store.conn.nodeId : 0"
             @select="store.select($event)"
-            @delete="store.deleteServer($event)"
+            @delete="confirmDelete($event)"
           />
         </div>
       </div>
     </div>
   </div>
+
+  <ConfirmDialog
+    :visible="!!pendingDeleteId"
+    message="Delete this server and all its nodes?"
+    @confirm="doDelete"
+    @cancel="pendingDeleteId = null"
+  />
 </template>
 
 <script setup>
@@ -78,10 +85,21 @@ import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useServerStore } from './stores/serverStore.js'
 import { OpenLogsWindow } from '../bindings/freesurf/app.js'
 import ServerItem from './components/ServerItem.vue'
+import ConfirmDialog from './components/ConfirmDialog.vue'
 
 const store = useServerStore()
 const menuOpen = ref(false)
 const addWrap = ref(null)
+const pendingDeleteId = ref(null)
+
+function confirmDelete(id) {
+  pendingDeleteId.value = id
+}
+
+function doDelete() {
+  store.deleteServer(pendingDeleteId.value)
+  pendingDeleteId.value = null
+}
 
 function openLogs() {
   OpenLogsWindow()
