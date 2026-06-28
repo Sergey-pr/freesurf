@@ -37,7 +37,63 @@ func (a *App) showError(err error) {
 
 func (a *App) ServiceStartup(_ context.Context, _ application.ServiceOptions) error {
 	engine.ClearSentinel() // always start disconnected
-	return store.InitDB()
+	if err := store.InitDB(); err != nil {
+		return err
+	}
+	go a.refreshAllSubscriptions()
+	return nil
+}
+
+type serverRefreshEvent struct {
+	ID    int64  `json:"id"`
+	Error string `json:"error,omitempty"`
+}
+
+func (a *App) refreshAllSubscriptions() {
+	servers, err := store.GetServers()
+	if err != nil {
+		return
+	}
+	subs_ := make([]store.ServerWithNodes, 0, len(servers))
+	for _, s := range servers {
+		if s.URL != nil && *s.URL != "" {
+			subs_ = append(subs_, s)
+		}
+	}
+	if len(subs_) == 0 {
+		return
+	}
+	for _, s := range subs_ {
+		application.Get().Event.Emit("servers:refreshing", serverRefreshEvent{ID: s.ID})
+		errMsg := a.doRefreshServer(&s.Server)
+		application.Get().Event.Emit("servers:refresh-done", serverRefreshEvent{ID: s.ID, Error: errMsg})
+	}
+	application.Get().Event.Emit("servers:changed")
+}
+
+// doRefreshServer fetches and saves updated nodes for s. Returns an error string (empty = success).
+func (a *App) doRefreshServer(server *store.Server) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+
+	body, err := subs.FetchSubscription(ctx, *server.URL)
+	if err != nil {
+		return err.Error()
+	}
+	nodes := subs.NodesFromBody(body)
+	if subs.IsBlockedPlaceholder(nodes) {
+		return "subscription server rejected this client"
+	}
+	if len(nodes) == 0 {
+		return "no nodes found in subscription"
+	}
+	if err := store.DeleteNodesByServer(server.ID); err != nil {
+		return err.Error()
+	}
+	if _, err := a.saveServer(server, nodes); err != nil {
+		return err.Error()
+	}
+	return ""
 }
 
 func (a *App) ServiceShutdown() error {
@@ -105,35 +161,19 @@ func (a *App) RefreshServer(id int64) *store.ServerWithNodes {
 		return nil
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
-	defer cancel()
-
-	body, err := subs.FetchSubscription(ctx, *server.URL)
-	if err != nil {
-		a.showError(err)
-		return nil
-	}
-	nodes := subs.NodesFromBody(body)
-	if subs.IsBlockedPlaceholder(nodes) {
-		a.showError(fmt.Errorf("the subscription server rejected this client (\"app not supported\")"))
-		return nil
-	}
-	if len(nodes) == 0 {
-		a.showError(fmt.Errorf("no servers found in the subscription"))
+	application.Get().Event.Emit("servers:refreshing", serverRefreshEvent{ID: id})
+	errMsg := a.doRefreshServer(server)
+	application.Get().Event.Emit("servers:refresh-done", serverRefreshEvent{ID: id, Error: errMsg})
+	if errMsg != "" {
 		return nil
 	}
 
-	if err := store.DeleteNodesByServer(id); err != nil {
-		a.showError(err)
-		return nil
-	}
-	saved, err := a.saveServer(server, nodes)
+	nodes, err := store.GetNodesByServer(id)
 	if err != nil {
-		a.showError(err)
 		return nil
 	}
 	application.Get().Event.Emit("servers:changed")
-	return saved
+	return &store.ServerWithNodes{Server: *server, Nodes: nodes}
 }
 
 // saveServer inserts the server (if new) and its nodes, returning the combined view.

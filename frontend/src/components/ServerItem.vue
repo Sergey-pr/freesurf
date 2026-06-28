@@ -20,6 +20,11 @@
         {{ server.name }}
         <span v-if="hasNodes" class="server-count">{{ server.nodes.length }}</span>
         <span v-if="server.kind === 'subscription'" class="server-kind">sub</span>
+        <span
+          v-if="refreshError"
+          class="refresh-error-badge"
+          :title="refreshError"
+        >⚠</span>
       </div>
 
       <div class="server-actions">
@@ -40,6 +45,12 @@
         <button class="btn-icon server-del" title="Delete" @click="$emit('delete', server.id)">✕</button>
       </div>
     </div>
+
+    <Transition name="refresh-overlay">
+      <div v-if="store.refreshing[server.id]" class="refresh-overlay">
+        <div class="refresh-spinner" />
+      </div>
+    </Transition>
 
     <div v-if="hasNodes && open" class="node-list">
       <div
@@ -84,6 +95,7 @@ const store = useServerStore()
 const open = ref(true)
 const hasNodes = computed(() => (props.server.nodes?.length ?? 0) > 0)
 const collapsible = computed(() => (props.server.nodes?.length ?? 0) > 1)
+const refreshError = computed(() => store.refreshErrors[props.server.id] ?? null)
 
 function pingLabel(id) {
   const p = store.pings[id]
@@ -110,6 +122,43 @@ function pingClass(id) {
   border: 1px solid var(--border);
   border-radius: 8px;
   overflow: hidden;
+  position: relative;
+}
+
+.refresh-overlay {
+  position: absolute;
+  inset: 0;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(2px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+  pointer-events: none;
+}
+
+.refresh-spinner {
+  width: 22px;
+  height: 22px;
+  border: 2px solid rgba(255, 255, 255, 0.15);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.refresh-overlay-enter-active,
+.refresh-overlay-leave-active { transition: opacity 0.2s; }
+.refresh-overlay-enter-from,
+.refresh-overlay-leave-to { opacity: 0; }
+
+.refresh-error-badge {
+  font-size: 11px;
+  color: var(--danger);
+  cursor: default;
+  flex-shrink: 0;
 }
 
 .server-header {

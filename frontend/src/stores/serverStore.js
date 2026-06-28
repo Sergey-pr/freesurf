@@ -20,7 +20,8 @@ export const useServerStore = defineStore('servers', () => {
   const selectedNodeId = ref(0)
   // nodeId -> latency: a number (ms), -1 (failed), or 'ping' (in progress).
   const pings = ref({})
-  const refreshing = ref({}) // serverId -> bool
+  const refreshing = ref({})    // serverId -> bool
+  const refreshErrors = ref({}) // serverId -> error string
 
   const isConnected = computed(() => conn.value.status === 'connected')
   const isConnecting = computed(() => conn.value.status === 'connecting')
@@ -82,13 +83,7 @@ export const useServerStore = defineStore('servers', () => {
   }
 
   async function refreshServer(id) {
-    refreshing.value = { ...refreshing.value, [id]: true }
-    try {
-      await RefreshServer(id)
-      await load()
-    } finally {
-      refreshing.value = { ...refreshing.value, [id]: false }
-    }
+    await RefreshServer(id)
   }
 
   async function pingNode(id) {
@@ -130,6 +125,19 @@ export const useServerStore = defineStore('servers', () => {
   }
 
   // Backend pushes updates when state changes from anywhere.
+  Events.On('servers:refreshing', ev => {
+    const id = ev?.data?.id
+    if (id) refreshing.value = { ...refreshing.value, [id]: true }
+  })
+  Events.On('servers:refresh-done', ev => {
+    const { id, error } = ev?.data ?? {}
+    if (id) {
+      refreshing.value = { ...refreshing.value, [id]: false }
+      const errs = { ...refreshErrors.value }
+      if (error) errs[id] = error; else delete errs[id]
+      refreshErrors.value = errs
+    }
+  })
   Events.On('servers:changed', () => load())
   Events.On('vpn:state', ev => {
     conn.value = ev.data ?? conn.value
@@ -140,6 +148,7 @@ export const useServerStore = defineStore('servers', () => {
     conn,
     pings,
     refreshing,
+    refreshErrors,
     isConnected,
     isConnecting,
     selectedNodeId,
