@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"freesurf/internal/engine"
@@ -18,10 +19,18 @@ type App struct {
 	errorWindow *application.WebviewWindow
 	logsWindow  *application.WebviewWindow
 	engine      *engine.Engine
+
+	refreshReset chan struct{} // ping to restart the auto-refresh timer (interval changed)
+	refreshStop  chan struct{} // closed to stop the auto-refresh loop
+	refreshMu    sync.Mutex    // guards against concurrent refreshAllSubscriptions runs
 }
 
 func NewApp() *App {
-	return &App{engine: engine.New()}
+	return &App{
+		engine:       engine.New(),
+		refreshReset: make(chan struct{}, 1),
+		refreshStop:  make(chan struct{}),
+	}
 }
 
 func (a *App) SetErrorWindow(w *application.WebviewWindow) { a.errorWindow = w }
@@ -41,7 +50,45 @@ func (a *App) ServiceStartup(_ context.Context, _ application.ServiceOptions) er
 		return err
 	}
 	go a.refreshAllSubscriptions()
+	go a.autoRefreshLoop()
 	return nil
+}
+
+// autoRefreshLoop periodically refreshes all subscriptions, using the interval
+// from settings. It restarts its timer when refreshReset is pinged (after the
+// interval changes) and exits when refreshStop is closed.
+func (a *App) autoRefreshLoop() {
+	for {
+		d := time.Duration(store.GetAutoRefreshMinutes()) * time.Minute
+		timer := time.NewTimer(d)
+		select {
+		case <-timer.C:
+			a.refreshAllSubscriptions()
+		case <-a.refreshReset:
+			timer.Stop()
+		case <-a.refreshStop:
+			timer.Stop()
+			return
+		}
+	}
+}
+
+// GetAutoRefreshMinutes returns the subscription auto-refresh interval (minutes).
+func (a *App) GetAutoRefreshMinutes() int {
+	return store.GetAutoRefreshMinutes()
+}
+
+// SetAutoRefreshMinutes persists the auto-refresh interval and restarts the timer.
+func (a *App) SetAutoRefreshMinutes(minutes int) int {
+	if err := store.SetAutoRefreshMinutes(minutes); err != nil {
+		a.showError(err)
+		return store.GetAutoRefreshMinutes()
+	}
+	select {
+	case a.refreshReset <- struct{}{}:
+	default:
+	}
+	return store.GetAutoRefreshMinutes()
 }
 
 type serverRefreshEvent struct {
@@ -50,6 +97,12 @@ type serverRefreshEvent struct {
 }
 
 func (a *App) refreshAllSubscriptions() {
+	// Skip if a refresh is already running (e.g. startup + timer overlap).
+	if !a.refreshMu.TryLock() {
+		return
+	}
+	defer a.refreshMu.Unlock()
+
 	servers, err := store.GetServers()
 	if err != nil {
 		return
@@ -97,6 +150,7 @@ func (a *App) doRefreshServer(server *store.Server) string {
 }
 
 func (a *App) ServiceShutdown() error {
+	close(a.refreshStop)
 	a.engine.Shutdown()
 	return nil
 }

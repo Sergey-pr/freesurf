@@ -83,6 +83,14 @@ export function Disconnect() {
 }
 
 /**
+ * GetAutoRefreshMinutes returns the subscription auto-refresh interval (minutes).
+ * @returns {$CancellablePromise<number>}
+ */
+export function GetAutoRefreshMinutes() {
+    return $Call.ByID(1039579228);
+}
+
+/**
  * @returns {$CancellablePromise<engine$0.ConnState>}
  */
 export function GetConnState() {
@@ -162,6 +170,15 @@ export function RenameServer(id, name) {
     return $Call.ByID(3176933048, id, name).then(/** @type {($result: any) => any} */(($result) => {
         return $$createType6($result);
     }));
+}
+
+/**
+ * SetAutoRefreshMinutes persists the auto-refresh interval and restarts the timer.
+ * @param {number} minutes
+ * @returns {$CancellablePromise<number>}
+ */
+export function SetAutoRefreshMinutes(minutes) {
+    return $Call.ByID(222770144, minutes);
 }
 
 /**

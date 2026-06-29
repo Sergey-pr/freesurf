@@ -4,6 +4,7 @@
       <h1>FreeSurf</h1>
 
       <button class="logs-btn" title="Show logs" @click="openLogs">Logs</button>
+      <button class="logs-btn settings-btn" title="Settings" @click="settingsOpen = true">Settings</button>
 
       <div class="add-wrap" ref="addWrap">
         <button class="add-btn" title="Add server" @click="menuOpen = !menuOpen">+</button>
@@ -78,6 +79,8 @@
     @confirm="doDelete"
     @cancel="pendingDeleteId = null"
   />
+
+  <SettingsDialog :visible="settingsOpen" @close="settingsOpen = false" />
 </template>
 
 <script setup>
@@ -86,11 +89,13 @@ import { useServerStore } from './stores/serverStore.js'
 import { OpenLogsWindow } from '../bindings/freesurf/app.js'
 import ServerItem from './components/ServerItem.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
+import SettingsDialog from './components/SettingsDialog.vue'
 
 const store = useServerStore()
 const menuOpen = ref(false)
 const addWrap = ref(null)
 const pendingDeleteId = ref(null)
+const settingsOpen = ref(false)
 
 function confirmDelete(id) {
   pendingDeleteId.value = id
@@ -145,6 +150,7 @@ onBeforeUnmount(() => {
   -webkit-app-region: no-drag;
 }
 .logs-btn:hover { border-color: var(--muted); color: var(--text); }
+.settings-btn { margin-left: 6px; }
 
 /* Add (+) menu */
 .add-wrap {
