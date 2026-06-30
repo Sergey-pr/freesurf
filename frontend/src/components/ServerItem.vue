@@ -30,10 +30,10 @@
       <div class="server-actions">
         <button
           v-if="hasNodes"
-          class="btn-icon"
+          class="btn-ping"
           title="Ping all nodes"
           @click="store.pingServer(server.id)"
-        >📶</button>
+        >PING</button>
         <button
           v-if="server.url"
           class="btn-icon"
@@ -66,10 +66,10 @@
         <span v-if="node.id === activeNodeId" class="node-active-badge">on</span>
         <span class="node-ping" :class="pingClass(node.id)">{{ pingLabel(node.id) }}</span>
         <button
-          class="btn-icon node-ping-btn"
+          class="btn-ping node-ping-btn"
           title="Ping"
           @click.stop="store.pingNode(node.id)"
-        >⚡</button>
+        >PING</button>
       </div>
     </div>
 
@@ -294,12 +294,21 @@ function pingClass(id) {
 .node-ping.bad { color: var(--danger); opacity: 0.7; }
 .node-ping.pinging { color: var(--muted); }
 
-.node-ping-btn {
-  font-size: 11px;
+.btn-ping {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 7px;
   flex-shrink: 0;
-  opacity: 0.55;
+  cursor: pointer;
 }
-.node-ping-btn:hover { opacity: 1; color: var(--accent); }
+.btn-ping:hover { color: var(--accent); border-color: var(--accent); }
+
+.node-ping-btn { padding: 1px 6px; }
 
 .node-empty {
   font-size: 11px;
