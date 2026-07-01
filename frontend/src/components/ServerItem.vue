@@ -29,19 +29,18 @@
 
       <div class="server-actions">
         <button
+          v-if="server.url"
+          class="btn-ping"
+          title="Refresh subscription"
+          :disabled="store.refreshing[server.id]"
+          @click="store.refreshServer(server.id)"
+        >REFRESH</button>
+        <button
           v-if="hasNodes"
           class="btn-ping"
           title="Ping all nodes"
           @click="store.pingServer(server.id)"
         >PING</button>
-        <button
-          v-if="server.url"
-          class="btn-icon"
-          :class="{ spinning: store.refreshing[server.id] }"
-          title="Refresh subscription"
-          :disabled="store.refreshing[server.id]"
-          @click="store.refreshServer(server.id)"
-        >↻</button>
         <button class="btn-icon server-del" title="Delete" @click="$emit('delete', server.id)">✕</button>
       </div>
     </div>
@@ -223,9 +222,6 @@ function pingClass(id) {
 .server-del { font-size: 11px; }
 .server-del:hover { color: var(--danger); }
 
-.spinning { animation: spin 0.8s linear infinite; }
-@keyframes spin { to { transform: rotate(360deg); } }
-
 .node-list {
   display: flex;
   flex-direction: column;
@@ -307,6 +303,8 @@ function pingClass(id) {
   cursor: pointer;
 }
 .btn-ping:hover { color: var(--accent); border-color: var(--accent); }
+.btn-ping:disabled { opacity: 0.5; cursor: default; }
+.btn-ping:disabled:hover { color: var(--muted); border-color: var(--border); }
 
 .node-ping-btn { padding: 1px 6px; }
 
