@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"freesurf/internal/dnsresolve"
 	"freesurf/internal/paths"
 	"freesurf/internal/store"
 )
@@ -35,31 +36,15 @@ func xrayProcessName() string {
 	return paths.XrayName
 }
 
-// resolveServerIP returns a concrete IP for host: the host itself if it is already
-// an IP, otherwise its first resolved address (IPv4 preferred). Returns "" if it
-// can't be resolved. Pinning a single IP - shared by the Xray outbound address and
-// the sing-box direct rule - is what guarantees the two agree (a domain resolved
-// twice can yield different IPs), which is what breaks the routing loop.
+// resolveServerIP returns a concrete IPv4 for host (the host itself if it is
+// already an IP), or "" if it can't be resolved. Resolution goes through
+// dnsresolve (DoH + system) so a poisoned local DNS path can't hand back a
+// blackholed address - on Windows this IP is the actual Xray connect address.
+// Pinning a single IP - shared by the Xray outbound address and the sing-box
+// direct rule - is what guarantees the two agree (a domain resolved twice can
+// yield different IPs), which is what breaks the routing loop.
 func resolveServerIP(host string) string {
-	if host == "" {
-		return ""
-	}
-	if net.ParseIP(host) != nil {
-		return host
-	}
-	ips, err := net.LookupIP(host)
-	if err != nil {
-		return ""
-	}
-	for _, ip := range ips {
-		if ip.To4() != nil {
-			return ip.String()
-		}
-	}
-	if len(ips) > 0 {
-		return ips[0].String()
-	}
-	return ""
+	return dnsresolve.FirstIP(host)
 }
 
 func ipToCIDR(ip net.IP) string {

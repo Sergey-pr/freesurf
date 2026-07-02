@@ -131,7 +131,8 @@ export function OpenLogsWindow() {
 }
 
 /**
- * PingNode returns the TCP connect latency (ms) to a node's server, or -1 on failure.
+ * PingNode returns the connect latency (ms) to a node's server, or -1 on failure,
+ * logging the probe outcome (and failure reason) to the log window.
  * @param {number} id
  * @returns {$CancellablePromise<number>}
  */
@@ -140,7 +141,8 @@ export function PingNode(id) {
 }
 
 /**
- * PingServer pings all nodes of a server concurrently, returning nodeID → ms.
+ * PingServer pings all nodes of a server concurrently, returning nodeID → ms and
+ * logging each probe outcome (and failure reason) to the log window.
  * @param {number} id
  * @returns {$CancellablePromise<{ [_ in `${number}`]?: number }>}
  */

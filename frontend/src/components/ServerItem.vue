@@ -62,6 +62,8 @@
         <span class="node-dot" />
         <span class="node-name">{{ node.name }}</span>
         <span class="node-proto">{{ node.protocol }}</span>
+        <span v-if="nodeSecurity(node)" class="node-sec" :class="nodeSecurity(node)">{{ nodeSecurity(node) }}</span>
+        <span v-if="nodeQuic(node)" class="node-quic" title="QUIC / HTTP-3 (UDP)">H3</span>
         <span v-if="node.id === activeNodeId" class="node-active-badge">on</span>
         <span class="node-ping" :class="pingClass(node.id)">{{ pingLabel(node.id) }}</span>
         <button
@@ -95,6 +97,35 @@ const open = ref(true)
 const hasNodes = computed(() => (props.server.nodes?.length ?? 0) > 0)
 const collapsible = computed(() => (props.server.nodes?.length ?? 0) > 1)
 const refreshError = computed(() => store.refreshErrors[props.server.id] ?? null)
+
+// nodeSecurity derives the transport security (reality/tls/none/...) from a node's
+// share URI, mirroring the backend detection in internal/proxy/config.go: a reality
+// public key (pbk) implies reality even when security= is omitted.
+function nodeSecurity(node) {
+  if (!node.uri) return ''
+  try {
+    const q = new URL(node.uri).searchParams
+    if (q.get('pbk')) return 'reality'
+    const sec = (q.get('security') || '').toLowerCase()
+    if (sec === '' || sec === 'none') return 'none'
+    return sec
+  } catch {
+    return ''
+  }
+}
+
+// nodeQuic reports whether the node runs over QUIC/UDP (HTTP/3), signalled by an
+// h3 entry in the alpn list. These are probed over UDP, not TCP - mirrors quicNode
+// in internal/ping.
+function nodeQuic(node) {
+  if (!node.uri) return false
+  try {
+    const alpn = new URL(node.uri).searchParams.get('alpn') || ''
+    return alpn.split(',').map((a) => a.trim()).includes('h3')
+  } catch {
+    return false
+  }
+}
 
 function pingLabel(id) {
   const p = store.pings[id]
@@ -266,6 +297,41 @@ function pingClass(id) {
   font-size: 9px;
   text-transform: uppercase;
   color: var(--muted);
+}
+
+.node-sec {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 1px 5px;
+}
+.node-sec.reality {
+  color: var(--accent);
+  background: rgba(108,99,255,0.12);
+  border-color: transparent;
+}
+.node-sec.tls {
+  color: var(--success);
+  background: rgba(62,207,142,0.12);
+  border-color: transparent;
+}
+.node-sec.none {
+  color: var(--muted);
+}
+
+.node-quic {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: var(--warning);
+  background: rgba(240, 180, 41, 0.14);
+  border-radius: 3px;
+  padding: 1px 5px;
+  cursor: default;
 }
 
 .node-active-badge {

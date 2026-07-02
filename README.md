@@ -2,9 +2,10 @@
 
 A minimalistic, multi-platform (macOS / Linux / Windows) VPN client.
 
-> **Status: working tunnel on macOS (VLESS).** The UI, data model, local storage,
-> and a real sing-box TUN engine are in place for macOS. Linux/Windows TUN and more
-> protocols are next (see [Roadmap](#roadmap)).
+> **Status: working tunnel on macOS and Windows (VLESS).** The UI, data model,
+> local storage, and a real two-core TUN engine are in place. macOS is the primary
+> tested platform; Windows is implemented (native service + Wintun) but less
+> exercised. Linux TUN and more protocols are next (see [Roadmap](#roadmap)).
 
 ## What works today
 
@@ -13,21 +14,34 @@ A minimalistic, multi-platform (macOS / Linux / Windows) VPN client.
   nodes; single-node servers render flat.
 - Top-right **+** button → dropdown → **Paste from clipboard**: reads the system
   clipboard and imports a subscription URL or one-or-more share URIs into the list.
-- Select a node, hit **Start**: the app downloads & pins the sing-box core, builds
-  a TUN `config.json`, validates it with `sing-box check`, and launches the core
-  with elevated privileges (a macOS auth prompt). **Stop** tears it down.
+- Select a node, hit **Start**: the app downloads & pins both cores (Xray +
+  sing-box), builds their configs, validates with `sing-box check`, installs a
+  privileged helper on first connect (one auth/UAC prompt), and brings the tunnel
+  up. **Stop** tears it down.
+- **Ping** an individual node or a whole subscription to see reachability/latency.
+  Names are resolved over DoH (bypassing local DNS interference) and each node is
+  probed the way it connects — TCP, or QUIC/UDP for HTTP/3 (`H3`) nodes.
 - Everything is persisted in SQLite.
 
-### sing-box engine
+### Tunnel engine (two cores)
 
-- **Core:** the `sing-box-lx` fork is downloaded from GitHub (pinned version) into
-  `<data>/bin/sing-box` on first connect; the version is verified before use.
-- **Parser:** `vless://` share URIs → sing-box outbound (TLS / Reality / uTLS /
-  ALPN / flow / ws・grpc・http(upgrade) transports). VLESS only for now.
+A connection runs **two cores**, split by privilege:
+
+- **Xray** — runs *unprivileged* as the proxy backend, exposing a local SOCKS port.
+- **sing-box** — runs *privileged* (needs the TUN device); owns the full-tunnel TUN
+  inbound (`auto_route`) and routes traffic into Xray's SOCKS.
+
+- **Cores:** both binaries are downloaded from GitHub and pinned to fixed versions
+  into `<data>/bin/` on first connect; versions are verified before use.
+- **Parser:** `vless://` share URIs → Xray outbound (TLS / Reality / uTLS / ALPN /
+  flow / tcp・xhttp・ws・grpc・httpupgrade transports). VLESS only for now.
 - **Config:** full-tunnel TUN inbound (`auto_route`), DNS + route, proxy + direct
-  outbounds (sing-box 1.13.x schema).
-- **Privileges:** TUN needs root; on macOS the core is started via an `osascript`
-  admin prompt (macOS caches the right for ~5 min, so Stop usually won't re-prompt).
+  outbounds; a direct rule pins the server IP so the core's own traffic to the
+  server doesn't loop back into the TUN.
+- **Privileges:** the TUN core needs root / the TUN device, so it runs via a helper
+  installed once — the only prompt (password / UAC). macOS uses a launchd
+  LaunchDaemon; Windows a native Go service (LocalSystem) + Wintun. After that,
+  Start/Stop is just a sentinel file, so it won't re-prompt.
 
 ## Stack
 
@@ -51,14 +65,18 @@ The visual design and project layout follow the `timespan` app; the VPN concepts
 
 ## Install (macOS)
 
-Release builds are ad-hoc signed but not notarized. After downloading and
-unzipping, macOS quarantines the app and refuses to open it with *"can't be
-opened because it may be damaged or incomplete"*. Strip the quarantine
-attribute once and it will launch:
+Release builds are ad-hoc signed but not notarized, so macOS blocks the first
+launch. Allow it through **System Settings**:
 
-```sh
-xattr -dr com.apple.quarantine freesurf.app
-```
+1. Double-click `freesurf.app` — macOS refuses to open it (*"cannot be opened
+   because the developer cannot be verified"*).
+2. Open **System Settings → Privacy & Security**.
+3. Scroll to the **Security** section — you'll see *"FreeSurf was blocked to
+   protect your Mac."* Click **Open Anyway**.
+4. Confirm with your password / Touch ID, then click **Open** in the final dialog.
+
+The **Open Anyway** button appears only after you've tried (and failed) to open the
+app once, and it stays available for about an hour.
 
 ## Development
 
@@ -93,10 +111,10 @@ State is stored in SQLite at:
 
 ## Roadmap
 
-1. ~~**sing-box engine**~~ - done for macOS (download/pin core, generate TUN
-   `config.json`, validate, run with privileges, real connect/disconnect).
-2. **Linux & Windows TUN** - privilege elevation (pkexec/sudo on Linux; runas +
-   `wintun.dll` on Windows). Currently macOS-only; other platforms return a clear
+1. ~~**Two-core engine**~~ - done (download/pin Xray + sing-box, generate configs,
+   validate, run with privileges, real connect/disconnect).
+2. ~~**Windows TUN**~~ - done (native Go service + Wintun). **Linux TUN** is next -
+   privilege elevation (systemd unit / pkexec, pure Go); currently returns a clear
    "not yet supported" error.
 3. ~~**Subscription fetching**~~ - done. Paste a subscription URL or a Happ
    `happ://crypt5/…` deep link (decrypted locally, then fetched with the Happ

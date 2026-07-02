@@ -247,17 +247,21 @@ func (a *App) saveServer(server *store.Server, nodes []store.Node) (*store.Serve
 	return &store.ServerWithNodes{Server: *server, Nodes: saved}, nil
 }
 
-// PingNode returns the TCP connect latency (ms) to a node's server, or -1 on failure.
+// PingNode returns the connect latency (ms) to a node's server, or -1 on failure,
+// logging the probe outcome (and failure reason) to the log window.
 func (a *App) PingNode(id int64) int {
 	node, err := store.GetNodeByID(id)
 	if err != nil {
 		a.showError(err)
 		return -1
 	}
-	return ping.URI(node.URI)
+	r := ping.Probe(node.URI)
+	a.engine.Logf("ping %s: %s", node.Name, r.Log())
+	return r.MS
 }
 
-// PingServer pings all nodes of a server concurrently, returning nodeID → ms.
+// PingServer pings all nodes of a server concurrently, returning nodeID → ms and
+// logging each probe outcome (and failure reason) to the log window.
 func (a *App) PingServer(id int64) map[int64]int {
 	nodes, err := store.GetNodesByServer(id)
 	if err != nil {
@@ -265,10 +269,18 @@ func (a *App) PingServer(id int64) map[int64]int {
 		return map[int64]int{}
 	}
 	uris := make(map[int64]string, len(nodes))
+	names := make(map[int64]string, len(nodes))
 	for _, n := range nodes {
 		uris[n.ID] = n.URI
+		names[n.ID] = n.Name
 	}
-	return ping.All(uris)
+	results := ping.AllDetailed(uris)
+	out := make(map[int64]int, len(results))
+	for nid, r := range results {
+		a.engine.Logf("ping %s: %s", names[nid], r.Log())
+		out[nid] = r.MS
+	}
+	return out
 }
 
 func (a *App) RenameServer(id int64, name string) *store.Server {

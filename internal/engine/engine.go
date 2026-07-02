@@ -109,6 +109,10 @@ func (e *Engine) logf(format string, args ...any) {
 	application.Get().Event.Emit("log:line", line)
 }
 
+// Logf writes a line into the shared log buffer (and live logs window) from outside
+// the engine, e.g. ping diagnostics, using the same format as core logging.
+func (e *Engine) Logf(format string, args ...any) { e.logf(format, args...) }
+
 // LogText returns the full log buffer as a single string.
 func (e *Engine) LogText() string {
 	e.logMu.Lock()
