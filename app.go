@@ -96,6 +96,13 @@ type serverRefreshEvent struct {
 	Error string `json:"error,omitempty"`
 }
 
+// pingResultEvent is pushed to the frontend as each node's probe completes, so the
+// UI can show and re-sort latencies live instead of waiting for the whole batch.
+type pingResultEvent struct {
+	NodeID int64 `json:"nodeId"`
+	MS     int   `json:"ms"`
+}
+
 func (a *App) refreshAllSubscriptions() {
 	// Skip if a refresh is already running (e.g. startup + timer overlap).
 	if !a.refreshMu.TryLock() {
@@ -257,6 +264,7 @@ func (a *App) PingNode(id int64) int {
 	}
 	r := ping.Probe(node.URI)
 	a.engine.Logf("ping %s: %s", node.Name, r.Log())
+	application.Get().Event.Emit("ping:result", pingResultEvent{NodeID: id, MS: r.MS})
 	return r.MS
 }
 
@@ -274,12 +282,17 @@ func (a *App) PingServer(id int64) map[int64]int {
 		uris[n.ID] = n.URI
 		names[n.ID] = n.Name
 	}
-	results := ping.AllDetailed(uris)
-	out := make(map[int64]int, len(results))
-	for nid, r := range results {
+	out := make(map[int64]int, len(nodes))
+	var mu sync.Mutex
+	// Emit each result the moment its probe finishes so the UI updates and re-sorts
+	// live, rather than waiting for the slowest node in the batch.
+	ping.AllDetailedFunc(uris, func(nid int64, r ping.Result) {
 		a.engine.Logf("ping %s: %s", names[nid], r.Log())
+		application.Get().Event.Emit("ping:result", pingResultEvent{NodeID: nid, MS: r.MS})
+		mu.Lock()
 		out[nid] = r.MS
-	}
+		mu.Unlock()
+	})
 	return out
 }
 

@@ -195,13 +195,13 @@ func quicVersionNegotiationTrigger() []byte {
 	return pkt
 }
 
-// AllDetailed probes many URIs concurrently, returning id → Result. At most
-// maxConcurrency nodes are probed at once so a large subscription doesn't flood the
-// network with a wall of simultaneous connects (each node itself still probes its
-// DNS lookups and resolved IPs in parallel).
-func AllDetailed(uris map[int64]string) map[int64]Result {
-	res := make(map[int64]Result, len(uris))
-	var mu sync.Mutex
+// AllDetailedFunc probes many URIs concurrently, invoking cb(id, Result) as each
+// probe finishes (not in any particular order). cb is called from many goroutines,
+// so it must be safe for concurrent use. At most maxConcurrency nodes are probed at
+// once so a large subscription doesn't flood the network with a wall of simultaneous
+// connects (each node itself still probes its DNS lookups and resolved IPs in
+// parallel). It blocks until every probe has completed.
+func AllDetailedFunc(uris map[int64]string, cb func(id int64, r Result)) {
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, maxConcurrency)
 	for id, uri := range uris {
@@ -210,12 +210,21 @@ func AllDetailed(uris map[int64]string) map[int64]Result {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			r := Probe(uri)
-			mu.Lock()
-			res[id] = r
-			mu.Unlock()
+			cb(id, Probe(uri))
 		}(id, uri)
 	}
 	wg.Wait()
+}
+
+// AllDetailed probes many URIs concurrently, returning id → Result once all probes
+// have finished. For live/streaming results use AllDetailedFunc.
+func AllDetailed(uris map[int64]string) map[int64]Result {
+	res := make(map[int64]Result, len(uris))
+	var mu sync.Mutex
+	AllDetailedFunc(uris, func(id int64, r Result) {
+		mu.Lock()
+		res[id] = r
+		mu.Unlock()
+	})
 	return res
 }

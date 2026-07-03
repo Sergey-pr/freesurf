@@ -51,9 +51,9 @@
       </div>
     </Transition>
 
-    <div v-if="hasNodes && open" class="node-list">
+    <TransitionGroup v-if="hasNodes && open" tag="div" name="node" class="node-list">
       <div
-        v-for="node in server.nodes"
+        v-for="node in sortedNodes"
         :key="node.id"
         class="node-row"
         :class="{ selected: node.id === selectedNodeId, active: node.id === activeNodeId }"
@@ -72,7 +72,7 @@
           @click.stop="store.pingNode(node.id)"
         >PING</button>
       </div>
-    </div>
+    </TransitionGroup>
 
     <div v-else-if="!hasNodes" class="node-empty">
       No nodes yet - they appear after the subscription is fetched.
@@ -95,6 +95,22 @@ defineEmits(['select', 'delete'])
 const store = useServerStore()
 const open = ref(true)
 const hasNodes = computed(() => (props.server.nodes?.length ?? 0) > 0)
+
+// sortedNodes orders nodes by measured latency, fastest first, updating live as
+// each ping streams in. Successful pings (ascending ms) come first, then timeouts,
+// then not-yet/in-progress nodes - the last group keeps the original order, so
+// before any ping the list is unchanged. Ties keep original order (stable sort).
+const sortedNodes = computed(() => {
+  const rank = (id) => {
+    const p = store.pings[id]
+    if (typeof p === 'number') return p >= 0 ? [0, p] : [1, 0] // ok : timeout
+    return [2, 0] // pending or unpinged
+  }
+  return (props.server.nodes ?? [])
+    .map((node, i) => ({ node, i, k: rank(node.id) }))
+    .sort((a, b) => a.k[0] - b.k[0] || a.k[1] - b.k[1] || a.i - b.i)
+    .map((x) => x.node)
+})
 const collapsible = computed(() => (props.server.nodes?.length ?? 0) > 1)
 const refreshError = computed(() => store.refreshErrors[props.server.id] ?? null)
 
@@ -273,6 +289,8 @@ function pingClass(id) {
   cursor: pointer;
 }
 .node-row:hover { background: var(--surface2); }
+/* Smoothly slide rows into place as pings stream in and the list re-sorts. */
+.node-move { transition: transform 0.25s ease; }
 .node-row.selected { background: rgba(108,99,255,0.12); }
 .node-row.selected .node-dot { background: var(--accent); border-color: var(--accent); }
 

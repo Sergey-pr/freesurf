@@ -87,9 +87,10 @@ export const useServerStore = defineStore('servers', () => {
   }
 
   async function pingNode(id) {
+    // Results arrive via the 'ping:result' event below, streamed as each probe
+    // finishes; here we just mark the node in-progress and kick off the probe.
     pings.value = { ...pings.value, [id]: 'ping' }
-    const ms = await PingNode(id)
-    pings.value = { ...pings.value, [id]: ms }
+    await PingNode(id)
   }
 
   async function pingServer(id) {
@@ -99,8 +100,7 @@ export const useServerStore = defineStore('servers', () => {
       for (const n of server.nodes ?? []) marking[n.id] = 'ping'
       pings.value = { ...pings.value, ...marking }
     }
-    const res = await PingServer(id) // { nodeId: ms }
-    pings.value = { ...pings.value, ...res }
+    await PingServer(id)
   }
 
   async function connect(nodeId) {
@@ -137,6 +137,12 @@ export const useServerStore = defineStore('servers', () => {
       if (error) errs[id] = error; else delete errs[id]
       refreshErrors.value = errs
     }
+  })
+  // Each node's latency is pushed as its probe finishes, so the UI shows and
+  // re-sorts pings live instead of waiting for the whole batch.
+  Events.On('ping:result', ev => {
+    const { nodeId, ms } = ev?.data ?? {}
+    if (nodeId) pings.value = { ...pings.value, [nodeId]: ms }
   })
   Events.On('servers:changed', () => load())
   Events.On('vpn:state', ev => {
