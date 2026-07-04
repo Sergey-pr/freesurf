@@ -52,7 +52,7 @@ func xrayVersionOK(path string) bool {
 }
 
 func xrayAssetName() string {
-	osPart := map[string]string{"darwin": "macos", "linux": "linux", "windows": "windows"}[runtime.GOOS]
+	osPart := map[string]string{"darwin": "macos", "windows": "windows"}[runtime.GOOS]
 	if osPart == "" {
 		return ""
 	}

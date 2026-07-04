@@ -1,11 +1,11 @@
 # FreeSurf
 
-A minimalistic, multi-platform (macOS / Linux / Windows) VPN client.
+A minimalistic, multi-platform (macOS / Windows) VPN client.
 
 > **Status: working tunnel on macOS and Windows (VLESS).** The UI, data model,
 > local storage, and a real two-core TUN engine are in place. macOS is the primary
 > tested platform; Windows is implemented (native service + Wintun) but less
-> exercised. Linux TUN and more protocols are next (see [Roadmap](#roadmap)).
+> exercised. More protocols are next (see [Roadmap](#roadmap)).
 
 ## What works today
 
@@ -106,16 +106,13 @@ State is stored in SQLite at:
 | Platform | Path                                                  |
 |----------|-------------------------------------------------------|
 | macOS    | `~/Library/Application Support/FreeSurf/freesurf.db`  |
-| Linux    | `~/.config/FreeSurf/freesurf.db`                      |
 | Windows  | `%APPDATA%\FreeSurf\freesurf.db`                      |
 
 ## Roadmap
 
 1. ~~**Two-core engine**~~ - done (download/pin Xray + sing-box, generate configs,
    validate, run with privileges, real connect/disconnect).
-2. ~~**Windows TUN**~~ - done (native Go service + Wintun). **Linux TUN** is next -
-   privilege elevation (systemd unit / pkexec, pure Go); currently returns a clear
-   "not yet supported" error.
+2. ~~**Windows TUN**~~ - done (native Go service + Wintun).
 3. ~~**Subscription fetching**~~ - done. Paste a subscription URL or a Happ
    `happ://crypt5/…` deep link (decrypted locally, then fetched with the Happ
    `User-Agent` + a stable `X-Hwid`); servers are imported as collapsible nodes.

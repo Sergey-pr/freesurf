@@ -63,13 +63,6 @@ func coreAssetSuffix() string {
 	switch runtime.GOOS {
 	case "darwin":
 		return "darwin-" + runtime.GOARCH + ".tar.gz"
-	case "linux":
-		switch runtime.GOARCH {
-		case "amd64", "arm64":
-			return "linux-" + runtime.GOARCH + ".tar.gz"
-		case "arm":
-			return "linux-armv7.tar.gz"
-		}
 	case "windows":
 		switch runtime.GOARCH {
 		case "amd64", "arm64":
