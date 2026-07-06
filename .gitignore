@@ -20,3 +20,5 @@ frontend/package.json.md5
 
 .vscode/settings.json
 .vscode/launch.json
+
+*.local*
