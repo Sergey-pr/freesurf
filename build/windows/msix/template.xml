@@ -8,29 +8,29 @@
         AllowPromptForPassword="false">
     </Settings>
     <Installer
-        Path="mytest"
+        Path="Freesurf"
         Arguments=""
-        InstallLocation="C:\Program Files\My Company\My Product">
+        InstallLocation="C:\Program Files\SergeiPr\Freesurf">
     </Installer>
     <PackageInformation
-        PackageName="My Product"
-        PackageDisplayName="My Product"
-        PublisherName="CN=My Company"
-        PublisherDisplayName="My Company"
+        PackageName="Freesurf"
+        PackageDisplayName="Freesurf"
+        PublisherName="CN=Sergei Pr"
+        PublisherDisplayName="Sergei Pr"
         Version="0.1.0.0"
-        PackageDescription="A mytest application">
+        PackageDescription="Freesurf">
         <Capabilities>
             <Capability Name="runFullTrust" />
-            
+
         </Capabilities>
         <Applications>
             <Application
-                Id="com.example.mytest"
-                Description="A mytest application"
-                DisplayName="My Product"
-                ExecutableName="mytest"
+                Id="com.sergeipr.freesurf"
+                Description="Freesurf"
+                DisplayName="Freesurf"
+                ExecutableName="Freesurf"
                 EntryPoint="Windows.FullTrustApplication">
-                
+
             </Application>
         </Applications>
         <Resources>
@@ -41,13 +41,13 @@
         </Dependencies>
         <Properties>
             <Framework>false</Framework>
-            <DisplayName>My Product</DisplayName>
-            <PublisherDisplayName>My Company</PublisherDisplayName>
-            <Description>A mytest application</Description>
+            <DisplayName>Freesurf</DisplayName>
+            <PublisherDisplayName>Sergei Pr</PublisherDisplayName>
+            <Description>Freesurf</Description>
             <Logo>Assets\AppIcon.png</Logo>
         </Properties>
     </PackageInformation>
-    <SaveLocation PackagePath="mytest.msix" />
+    <SaveLocation PackagePath="freesurf.msix" />
     <PackageIntegrity>
         <CertificatePath></CertificatePath>
     </PackageIntegrity>

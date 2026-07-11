@@ -25,7 +25,11 @@
           :disabled="store.isConnecting || (!store.isConnected && !store.selectedNodeId)"
           @click="store.toggleConnection()"
         >
-          <span class="power-glyph">⏻</span>
+          <svg class="power-glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" aria-hidden="true">
+            <path d="M18.36 6.64a9 9 0 1 1-12.73 0" />
+            <line x1="12" y1="2" x2="12" y2="12" />
+          </svg>
           <span class="power-label">{{ powerLabel }}</span>
         </button>
 
@@ -244,7 +248,7 @@ onBeforeUnmount(() => {
   50%      { box-shadow: 0 0 0 8px rgba(108,99,255,0.04); }
 }
 
-.power-glyph { font-size: 44px; line-height: 1; }
+.power-glyph { width: 40px; height: 40px; }
 .power-label {
   font-size: 13px;
   font-weight: 600;

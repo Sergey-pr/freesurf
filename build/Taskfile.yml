@@ -7,6 +7,17 @@ tasks:
     cmds:
       - go mod tidy
 
+  fetch:cores:
+    label: fetch:cores ({{.TARGET_OS}}/{{.TARGET_ARCH}})
+    summary: Downloads the pinned proxy cores (sing-box, Xray) for embedding into the app
+    cmds:
+      # GOOS/GOARCH cleared so the tool itself always builds for the host;
+      # the target platform is passed via flags instead.
+      - GOOS= GOARCH= go run ./cmd/fetchcores -os {{.TARGET_OS}} -arch {{.TARGET_ARCH}}
+    vars:
+      TARGET_OS: '{{.TARGET_OS | default OS}}'
+      TARGET_ARCH: '{{.TARGET_ARCH | default ARCH}}'
+
   install:frontend:deps:
     summary: Install frontend dependencies
     dir: frontend

@@ -1,15 +1,10 @@
 package proxy
 
 import (
-	"archive/tar"
-	"compress/gzip"
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
@@ -20,14 +15,13 @@ import (
 // platform and its `version` output carries the full fork tag, so the check is
 // exact. The Xray side handles the actual proxy protocols.
 const (
-	singboxCoreRepo = "Leadaxe/sing-box-lx"
-
-	// RequiredCoreVersion is the pinned sing-box-lx release.
+	// RequiredCoreVersion is the pinned sing-box-lx release. Bumping it requires
+	// re-running cmd/fetchcores (the Taskfile build tasks do this automatically).
 	RequiredCoreVersion = "1.13.13-lx.15"
 )
 
-// EnsureCore installs the pinned sing-box binary if missing/out of date, returning
-// its path.
+// EnsureCore installs the pinned sing-box binary (embedded at build time) if
+// missing/out of date, returning its path.
 func EnsureCore(ctx context.Context) (string, error) {
 	path, err := paths.Singbox()
 	if err != nil {
@@ -40,11 +34,11 @@ func EnsureCore(ctx context.Context) (string, error) {
 	if coreVersionOK(path) {
 		return path, nil
 	}
-	if err := downloadCore(ctx, path); err != nil {
+	if err := installEmbeddedCore(paths.SingboxName, path); err != nil {
 		return "", err
 	}
 	if !coreVersionOK(path) {
-		return "", fmt.Errorf("downloaded core did not report version %s", RequiredCoreVersion)
+		return "", fmt.Errorf("embedded core did not report version %s", RequiredCoreVersion)
 	}
 	return path, nil
 }
@@ -57,92 +51,6 @@ func coreVersionOK(path string) bool {
 	defer cancel()
 	out, err := exec.CommandContext(ctx, path, "version").CombinedOutput()
 	return err == nil && strings.Contains(string(out), RequiredCoreVersion)
-}
-
-func coreAssetSuffix() string {
-	switch runtime.GOOS {
-	case "darwin":
-		return "darwin-" + runtime.GOARCH + ".tar.gz"
-	case "windows":
-		switch runtime.GOARCH {
-		case "amd64", "arm64":
-			return "windows-" + runtime.GOARCH + ".zip"
-		case "386":
-			return "windows-386-legacy-windows-7.zip"
-		}
-	}
-	return ""
-}
-
-func downloadCore(ctx context.Context, dest string) error {
-	suffix := coreAssetSuffix()
-	if suffix == "" {
-		return fmt.Errorf("unsupported platform %s/%s", runtime.GOOS, runtime.GOARCH)
-	}
-
-	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/releases/tags/v%s", singboxCoreRepo, RequiredCoreVersion)
-	rel, err := fetchRelease(ctx, apiURL)
-	if err != nil {
-		return err
-	}
-	var dlURL string
-	for _, a := range rel.Assets {
-		if strings.HasSuffix(a.Name, suffix) {
-			dlURL = a.URL
-			break
-		}
-	}
-	if dlURL == "" {
-		return fmt.Errorf("no asset matching %q in release v%s", suffix, RequiredCoreVersion)
-	}
-
-	tmp, err := os.CreateTemp("", "singbox-dl-*")
-	if err != nil {
-		return err
-	}
-	tmpPath := tmp.Name()
-	tmp.Close()
-	defer os.Remove(tmpPath)
-
-	if err := httpDownload(ctx, dlURL, tmpPath); err != nil {
-		return err
-	}
-	if strings.HasSuffix(suffix, ".zip") {
-		want := paths.SingboxName
-		if runtime.GOOS == "windows" {
-			want += ".exe"
-		}
-		return extractZipEntry(tmpPath, want, dest)
-	}
-	return extractTarGz(tmpPath, paths.SingboxName, dest)
-}
-
-func extractTarGz(archivePath, wantBase, dest string) error {
-	f, err := os.Open(archivePath)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	gz, err := gzip.NewReader(f)
-	if err != nil {
-		return err
-	}
-	defer gz.Close()
-
-	tr := tar.NewReader(gz)
-	for {
-		hdr, err := tr.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return err
-		}
-		if hdr.Typeflag == tar.TypeReg && filepath.Base(hdr.Name) == wantBase {
-			return writeExecutable(dest, tr)
-		}
-	}
-	return fmt.Errorf("%q not found in archive", wantBase)
 }
 
 // CheckConfig validates a sing-box config with `sing-box check`.

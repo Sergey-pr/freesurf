@@ -127,6 +127,24 @@ func (e *Engine) ClearLog() {
 	application.Get().Event.Emit("log:cleared")
 }
 
+// ReinstallCores force-reinstalls the embedded core binaries (sing-box, Xray,
+// and the Wintun driver on Windows). Refused while the tunnel is up, since the
+// binaries may be running.
+func (e *Engine) ReinstallCores() error {
+	if st := e.State(); st.Status != StatusDisconnected {
+		return fmt.Errorf("disconnect the VPN before reinstalling dependencies")
+	}
+	e.logf("Reinstalling embedded cores (sing-box %s, xray %s)…", proxy.RequiredCoreVersion, proxy.RequiredXrayVersion)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	if err := proxy.ReinstallCores(ctx); err != nil {
+		e.logf("Reinstall failed: %v", err)
+		return err
+	}
+	e.logf("Cores reinstalled.")
+	return nil
+}
+
 // Connect brings up the tunnel to the given node, reporting progress through the
 // "vpn:state" event. The returned error (if any) is for the caller to surface;
 // the state is already emitted.

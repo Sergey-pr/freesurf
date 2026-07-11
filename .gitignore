@@ -13,6 +13,10 @@ frontend/package.json.md5
 
 .task/
 
+# Proxy cores fetched at build time by cmd/fetchcores (embedded, not committed)
+internal/proxy/cores/*/*
+!internal/proxy/cores/*/README.md
+
 .DS_Store
 **/.DS_Store
 

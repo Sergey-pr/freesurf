@@ -1,0 +1,1 @@
+Pinned proxy core binaries (sing-box, xray) for windows-arm64 are placed here at build time by `go run ./cmd/fetchcores` and embedded into the app. They are not committed; only this README is, so the `go:embed` pattern always compiles.

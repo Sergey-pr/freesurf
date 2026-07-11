@@ -164,6 +164,15 @@ export function RefreshServer(id) {
 }
 
 /**
+ * ReinstallDependencies force-reinstalls the embedded core binaries (sing-box,
+ * Xray, and the Wintun driver on Windows). Fails while the tunnel is up.
+ * @returns {$CancellablePromise<boolean>}
+ */
+export function ReinstallDependencies() {
+    return $Call.ByID(3223464646);
+}
+
+/**
  * @param {number} id
  * @param {string} name
  * @returns {$CancellablePromise<store$0.Server | null>}

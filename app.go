@@ -173,6 +173,16 @@ func (a *App) UninstallHelper() bool {
 
 func (a *App) HelperInstalled() bool { return engine.HelperInstalled() }
 
+// ReinstallDependencies force-reinstalls the embedded core binaries (sing-box,
+// Xray, and the Wintun driver on Windows). Fails while the tunnel is up.
+func (a *App) ReinstallDependencies() bool {
+	if err := a.engine.ReinstallCores(); err != nil {
+		a.showError(err)
+		return false
+	}
+	return true
+}
+
 // GetServers returns all servers, each with its nodes, for rendering the list.
 func (a *App) GetServers() []store.ServerWithNodes {
 	servers, err := store.GetServers()

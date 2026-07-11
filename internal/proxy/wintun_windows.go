@@ -63,3 +63,15 @@ func EnsureWintun(_ context.Context) error {
 	}
 	return nil
 }
+
+// reinstallWintun rewrites the embedded wintun.dll even if one is present.
+func reinstallWintun(ctx context.Context) error {
+	dest, err := WintunPath()
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(dest); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return EnsureWintun(ctx)
+}

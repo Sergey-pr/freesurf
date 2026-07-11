@@ -14,7 +14,7 @@ A minimalistic, multi-platform (macOS / Windows) VPN client.
   nodes; single-node servers render flat.
 - Top-right **+** button → dropdown → **Paste from clipboard**: reads the system
   clipboard and imports a subscription URL or one-or-more share URIs into the list.
-- Select a node, hit **Start**: the app downloads & pins both cores (Xray +
+- Select a node, hit **Start**: the app installs both bundled cores (Xray +
   sing-box), builds their configs, validates with `sing-box check`, installs a
   privileged helper on first connect (one auth/UAC prompt), and brings the tunnel
   up. **Stop** tears it down.
@@ -31,8 +31,11 @@ A connection runs **two cores**, split by privilege:
 - **sing-box** — runs *privileged* (needs the TUN device); owns the full-tunnel TUN
   inbound (`auto_route`) and routes traffic into Xray's SOCKS.
 
-- **Cores:** both binaries are downloaded from GitHub and pinned to fixed versions
-  into `<data>/bin/` on first connect; versions are verified before use.
+- **Cores:** both binaries are embedded into the app at build time (fetched from
+  GitHub by `cmd/fetchcores`, which the build tasks run automatically) and pinned
+  to fixed versions. On first connect they are extracted into `<data>/bin/`;
+  versions are verified before use. No network access to GitHub is needed at
+  runtime.
 - **Parser:** `vless://` share URIs → Xray outbound (TLS / Reality / uTLS / ALPN /
   flow / tcp・xhttp・ws・grpc・httpupgrade transports). VLESS only for now.
 - **Config:** full-tunnel TUN inbound (`auto_route`), DNS + route, proxy + direct
@@ -110,7 +113,7 @@ State is stored in SQLite at:
 
 ## Roadmap
 
-1. ~~**Two-core engine**~~ - done (download/pin Xray + sing-box, generate configs,
+1. ~~**Two-core engine**~~ - done (embed/pin Xray + sing-box, generate configs,
    validate, run with privileges, real connect/disconnect).
 2. ~~**Windows TUN**~~ - done (native Go service + Wintun).
 3. ~~**Subscription fetching**~~ - done. Paste a subscription URL or a Happ
