@@ -12,7 +12,6 @@ import (
 	"archive/zip"
 	"compress/gzip"
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -105,22 +104,8 @@ func fetchSingbox(ctx context.Context, targetOS, targetArch, dest string) error 
 	if suffix == "" {
 		return fmt.Errorf("unsupported platform %s/%s", targetOS, targetArch)
 	}
-
-	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/releases/tags/v%s", singboxCoreRepo, proxy.RequiredCoreVersion)
-	rel, err := fetchRelease(ctx, apiURL)
-	if err != nil {
-		return err
-	}
-	var dlURL string
-	for _, a := range rel.Assets {
-		if strings.HasSuffix(a.Name, suffix) {
-			dlURL = a.URL
-			break
-		}
-	}
-	if dlURL == "" {
-		return fmt.Errorf("no asset matching %q in release v%s", suffix, proxy.RequiredCoreVersion)
-	}
+	dlURL := fmt.Sprintf("https://github.com/%s/releases/download/v%s/sing-box-%s-%s",
+		singboxCoreRepo, proxy.RequiredCoreVersion, proxy.RequiredCoreVersion, suffix)
 
 	want := paths.SingboxName
 	if targetOS == "windows" {
@@ -174,37 +159,6 @@ func xrayAssetName(targetOS, targetArch string) string {
 		return fmt.Sprintf("Xray-%s-32.zip", osPart)
 	}
 	return ""
-}
-
-type ghRelease struct {
-	TagName string `json:"tag_name"`
-	Assets  []struct {
-		Name string `json:"name"`
-		URL  string `json:"browser_download_url"`
-	} `json:"assets"`
-}
-
-func fetchRelease(ctx context.Context, url string) (*ghRelease, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Accept", "application/vnd.github.v3+json")
-	req.Header.Set("User-Agent", "freesurf/1.0")
-
-	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("github release API returned HTTP %d", resp.StatusCode)
-	}
-	var rel ghRelease
-	if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
-		return nil, err
-	}
-	return &rel, nil
 }
 
 // downloadAndExtract fetches the archive at url to a temp file and writes the
