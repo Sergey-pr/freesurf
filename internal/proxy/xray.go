@@ -50,9 +50,34 @@ func xrayVersionOK(path string) bool {
 	return err == nil && strings.Contains(string(out), RequiredXrayVersion)
 }
 
+// Process is a running core process. Exit is reported through a channel closed
+// by the wait goroutine, so a supervisor never reads exec.Cmd fields that the
+// same goroutine writes.
+type Process struct {
+	cmd  *exec.Cmd
+	done chan struct{}
+}
+
+// Kill stops the process. Safe to call more than once, or after it has exited.
+func (p *Process) Kill() {
+	if p != nil && p.cmd.Process != nil {
+		_ = p.cmd.Process.Kill()
+	}
+}
+
+// Exited reports whether the process has terminated.
+func (p *Process) Exited() bool {
+	select {
+	case <-p.done:
+		return true
+	default:
+		return false
+	}
+}
+
 // RunXray starts the (unprivileged) Xray process writing to logPath, returning the
-// running command so the caller can supervise and stop it.
-func RunXray(binPath, cfgPath, logPath string) (*exec.Cmd, error) {
+// running process so the caller can supervise and stop it.
+func RunXray(binPath, cfgPath, logPath string) (*Process, error) {
 	logFile, err := os.Create(logPath)
 	if err != nil {
 		return nil, err
@@ -62,9 +87,14 @@ func RunXray(binPath, cfgPath, logPath string) (*exec.Cmd, error) {
 	cmd.Stderr = logFile
 	cmd.SysProcAttr = hiddenProcAttr() // no console window on Windows
 	if err := cmd.Start(); err != nil {
-		logFile.Close()
+		_ = logFile.Close()
 		return nil, err
 	}
-	go func() { _ = cmd.Wait(); logFile.Close() }()
-	return cmd, nil
+	p := &Process{cmd: cmd, done: make(chan struct{})}
+	go func() {
+		_ = cmd.Wait()
+		_ = logFile.Close()
+		close(p.done)
+	}()
+	return p, nil
 }
