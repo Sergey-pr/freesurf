@@ -23,12 +23,15 @@ import { ref, onMounted, onUnmounted, nextTick } from 'vue'
 import { Events } from '@wailsio/runtime'
 import { GetLog, ClearLog } from '../bindings/freesurf/app.js'
 
+// Hard cap on rendered rows; core output is mostly unique, so it never stops arriving.
+const maxEntries = 2000
+
 // entries holds one row per unique message; repeats bump the count and refresh
 // the timestamp instead of adding another line.
 const entries = ref([])
 const copied = ref(false)
 const pane = ref(null)
-let offLine, offCleared
+let offLine, offCleared, offReload
 const byMsg = new Map() // msg text -> entry object
 
 function scrollToBottom() {
@@ -61,6 +64,11 @@ function ingest(line) {
     const entry = { key: msg, msg, time, count: 1 }
     byMsg.set(msg, entry)
     entries.value.push(entry)
+    if (entries.value.length > maxEntries) {
+      for (const dropped of entries.value.splice(0, entries.value.length - maxEntries)) {
+        byMsg.delete(dropped.msg)
+      }
+    }
   }
 }
 
@@ -89,13 +97,20 @@ async function copy() {
 
 onMounted(() => {
   load()
-  offLine = Events.On('log:line', ev => { ingest(ev.data); scrollToBottom() })
+  // Each event carries a tick's worth of core output.
+  offLine = Events.On('log:line', ev => {
+    for (const line of ev.data ?? []) ingest(line)
+    scrollToBottom()
+  })
   offCleared = Events.On('log:cleared', reset)
+  // Lines are only pushed while this window is open, so reload on every reopen.
+  offReload = Events.On('log:reload', load)
 })
 
 onUnmounted(() => {
   offLine?.()
   offCleared?.()
+  offReload?.()
 })
 </script>
 

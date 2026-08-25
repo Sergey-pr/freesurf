@@ -375,11 +375,21 @@ func (a *App) OpenLogsWindow() {
 	if a.logsWindow != nil {
 		a.logsWindow.Show()
 		a.logsWindow.Focus()
+		a.setLogStreaming(true)
 	}
 }
 
 func (a *App) CloseLogsWindow() {
 	if a.logsWindow != nil {
 		a.logsWindow.Hide()
+		a.setLogStreaming(false)
+	}
+}
+
+// setLogStreaming follows the logs window's visibility and reloads it on reopen.
+func (a *App) setLogStreaming(on bool) {
+	a.engine.SetLogStreaming(on)
+	if on {
+		application.Get().Event.Emit("log:reload")
 	}
 }

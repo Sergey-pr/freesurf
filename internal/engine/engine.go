@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"freesurf/internal/proxy"
@@ -49,6 +50,8 @@ type Engine struct {
 
 	logMu  sync.Mutex
 	logBuf []string
+	// logStream gates live pushing of lines to the UI.
+	logStream atomic.Bool
 }
 
 func New() *Engine {
@@ -102,17 +105,33 @@ func cleanCoreLine(s string) string {
 	return strings.TrimSpace(s)
 }
 
-// logf appends a timestamped line to the in-memory log buffer and emits it so any
-// open logs window updates live.
-func (e *Engine) logf(format string, args ...any) {
-	line := time.Now().Format("15:04:05") + "  " + sanitize(fmt.Sprintf(format, args...))
+// SetLogStreaming turns live pushing of log lines on or off; the buffer fills either way.
+func (e *Engine) SetLogStreaming(on bool) { e.logStream.Store(on) }
+
+// logLines appends timestamped messages to the buffer and pushes them as one event.
+func (e *Engine) logLines(msgs ...string) {
+	if len(msgs) == 0 {
+		return
+	}
+	now := time.Now().Format("15:04:05")
+	lines := make([]string, 0, len(msgs))
+	for _, m := range msgs {
+		lines = append(lines, now+"  "+sanitize(m))
+	}
 	e.logMu.Lock()
-	e.logBuf = append(e.logBuf, line)
+	e.logBuf = append(e.logBuf, lines...)
 	if len(e.logBuf) > logBufferMax {
 		e.logBuf = e.logBuf[len(e.logBuf)-logBufferMax:]
 	}
 	e.logMu.Unlock()
-	e.deps.emit("log:line", line)
+	if e.logStream.Load() {
+		e.deps.emit("log:line", lines)
+	}
+}
+
+// logf appends a single timestamped line to the log buffer.
+func (e *Engine) logf(format string, args ...any) {
+	e.logLines(fmt.Sprintf(format, args...))
 }
 
 // Logf writes a line into the shared log buffer (and live logs window) from outside
@@ -356,13 +375,15 @@ func (e *Engine) appendLogTail(name string, pathFn func() (string, error), prefi
 	if len(lines) == 0 {
 		return
 	}
-	e.logf("--- %s (tail) ---", name)
+	batch := make([]string, 0, len(lines)+2)
+	batch = append(batch, fmt.Sprintf("--- %s (tail) ---", name))
 	for _, l := range lines {
 		if cleaned := cleanCoreLine(l); cleaned != "" {
-			e.logf("%s: %s", prefix, cleaned)
+			batch = append(batch, prefix+": "+cleaned)
 		}
 	}
-	e.logf("--- end %s ---", name)
+	batch = append(batch, fmt.Sprintf("--- end %s ---", name))
+	e.logLines(batch...)
 }
 
 // tailCore follows sing-box.log while the tunnel is up, streaming new complete
@@ -392,11 +413,14 @@ func (e *Engine) tailCore(path string, stop chan struct{}) {
 				continue
 			}
 			offset += int64(nl) + 1
-			for _, line := range strings.Split(string(data[:nl]), "\n") {
+			raw := strings.Split(string(data[:nl]), "\n")
+			batch := make([]string, 0, len(raw))
+			for _, line := range raw {
 				if cleaned := cleanCoreLine(line); cleaned != "" {
-					e.logf("core: %s", cleaned)
+					batch = append(batch, "core: "+cleaned)
 				}
 			}
+			e.logLines(batch...)
 		}
 	}
 }

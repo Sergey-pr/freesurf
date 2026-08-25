@@ -90,6 +90,7 @@ func main() {
 	logsWindow.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
 		e.Cancel()
 		logsWindow.Hide()
+		appService.setLogStreaming(false)
 	})
 	appService.SetLogsWindow(logsWindow)
 

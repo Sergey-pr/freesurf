@@ -56,6 +56,7 @@ type harness struct {
 	mu         sync.Mutex
 	procs      []*fakeProcess
 	states     []ConnState
+	logEvents  [][]string
 	tunnelUp   int
 	tunnelDown int
 }
@@ -120,16 +121,23 @@ func (h *harness) lastProc() *fakeProcess {
 }
 
 func (h *harness) emit(name string, data ...any) {
-	if name != "vpn:state" || len(data) == 0 {
-		return
-	}
-	st, ok := data[0].(ConnState)
-	if !ok {
+	if len(data) == 0 {
 		return
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.states = append(h.states, st)
+	if st, ok := data[0].(ConnState); ok && name == "vpn:state" {
+		h.states = append(h.states, st)
+	}
+	if lines, ok := data[0].([]string); ok && name == "log:line" {
+		h.logEvents = append(h.logEvents, lines)
+	}
+}
+
+func (h *harness) logs() [][]string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([][]string(nil), h.logEvents...)
 }
 
 func (h *harness) statuses() []string {
@@ -363,6 +371,29 @@ func TestLogBufferIsCapped(t *testing.T) {
 	h.e.ClearLog()
 	if h.e.LogText() != "" {
 		t.Fatal("ClearLog left the buffer non-empty")
+	}
+}
+
+func TestLogStreamingIsGatedAndBatched(t *testing.T) {
+	h := newHarness(t)
+
+	h.e.logLines("a", "b", "c")
+	if n := len(h.logs()); n != 0 {
+		t.Fatalf("emitted %d events while streaming is off, want 0", n)
+	}
+	if !strings.Contains(h.e.LogText(), "a") {
+		t.Fatal("lines skipped the buffer while streaming is off")
+	}
+
+	h.e.SetLogStreaming(true)
+	h.e.logLines("d", "e", "f")
+	h.e.logLines()
+	events := h.logs()
+	if len(events) != 1 {
+		t.Fatalf("got %d events, want 1 per batch (and none for an empty one)", len(events))
+	}
+	if len(events[0]) != 3 {
+		t.Fatalf("batch carried %d lines, want 3", len(events[0]))
 	}
 }
 
