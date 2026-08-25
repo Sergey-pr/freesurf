@@ -12,6 +12,8 @@ import (
 	"archive/zip"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"io"
@@ -100,21 +102,21 @@ func fileExists(path string) bool {
 }
 
 func fetchSingbox(ctx context.Context, targetOS, targetArch, dest string) error {
-	suffix := singboxAssetSuffix(targetOS, targetArch)
-	if suffix == "" {
+	asset := singboxAssetName(targetOS, targetArch)
+	if asset == "" {
 		return fmt.Errorf("unsupported platform %s/%s", targetOS, targetArch)
 	}
-	dlURL := fmt.Sprintf("https://github.com/%s/releases/download/v%s/sing-box-%s-%s",
-		singboxCoreRepo, proxy.RequiredCoreVersion, proxy.RequiredCoreVersion, suffix)
+	dlURL := fmt.Sprintf("https://github.com/%s/releases/download/v%s/%s",
+		singboxCoreRepo, proxy.RequiredCoreVersion, asset)
 
 	want := paths.SingboxName
 	if targetOS == "windows" {
 		want += ".exe"
 	}
-	if strings.HasSuffix(suffix, ".zip") {
-		return downloadAndExtract(ctx, dlURL, want, dest, extractZipEntry)
+	if strings.HasSuffix(asset, ".zip") {
+		return downloadAndExtract(ctx, dlURL, asset, want, dest, extractZipEntry)
 	}
-	return downloadAndExtract(ctx, dlURL, want, dest, extractTarGz)
+	return downloadAndExtract(ctx, dlURL, asset, want, dest, extractTarGz)
 }
 
 func fetchXray(ctx context.Context, targetOS, targetArch, dest string) error {
@@ -127,7 +129,17 @@ func fetchXray(ctx context.Context, targetOS, targetArch, dest string) error {
 	if targetOS == "windows" {
 		want += ".exe"
 	}
-	return downloadAndExtract(ctx, url, want, dest, extractZipEntry)
+	return downloadAndExtract(ctx, url, asset, want, dest, extractZipEntry)
+}
+
+// singboxAssetName is the release asset for a target, and the key its pinned
+// digest is stored under.
+func singboxAssetName(targetOS, targetArch string) string {
+	suffix := singboxAssetSuffix(targetOS, targetArch)
+	if suffix == "" {
+		return ""
+	}
+	return fmt.Sprintf("sing-box-%s-%s", proxy.RequiredCoreVersion, suffix)
 }
 
 func singboxAssetSuffix(targetOS, targetArch string) string {
@@ -161,47 +173,78 @@ func xrayAssetName(targetOS, targetArch string) string {
 	return ""
 }
 
-// downloadAndExtract fetches the archive at url to a temp file and writes the
-// entry named wantBase to dest via the given extractor.
-func downloadAndExtract(ctx context.Context, url, wantBase, dest string, extract func(archivePath, wantBase, dest string) error) error {
+// downloadAndExtract fetches the archive at url to a temp file, checks it against
+// the digest pinned for assetName, and writes the entry named wantBase to dest via
+// the given extractor.
+func downloadAndExtract(ctx context.Context, url, assetName, wantBase, dest string, extract func(archivePath, wantBase, dest string) error) error {
 	tmp, err := os.CreateTemp("", "fetchcores-*")
 	if err != nil {
 		return err
 	}
 	tmpPath := tmp.Name()
-	tmp.Close()
-	defer os.Remove(tmpPath)
+	_ = tmp.Close()
+	defer func() {
+		_ = os.Remove(tmpPath)
+	}()
 
-	if err := httpDownload(ctx, url, tmpPath); err != nil {
+	sum, err := httpDownload(ctx, url, tmpPath)
+	if err != nil {
+		return err
+	}
+	if err := verifyDigest(assetName, sum); err != nil {
 		return err
 	}
 	return extract(tmpPath, wantBase, dest)
 }
 
-func httpDownload(ctx context.Context, url, dest string) error {
+// verifyDigest compares a download against its pinned SHA-256. An asset with no
+// pin is refused too, so bumping a core version without updating assetDigests
+// can't quietly skip the check.
+func verifyDigest(assetName, sum string) error {
+	want, ok := assetDigests[assetName]
+	if !ok {
+		return fmt.Errorf("no pinned SHA-256 for %q - add it to assetDigests in cmd/fetchcores/digests.go", assetName)
+	}
+	if !strings.EqualFold(sum, want) {
+		return fmt.Errorf("%s failed its checksum:\n  got    %s\n  pinned %s", assetName, sum, want)
+	}
+	return nil
+}
+
+// httpDownload writes url to dest and returns the SHA-256 of what it wrote.
+func httpDownload(ctx context.Context, url, dest string) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return err
+		return "", err
 	}
 	req.Header.Set("User-Agent", "freesurf/1.0")
 
 	resp, err := (&http.Client{Timeout: 5 * time.Minute}).Do(req)
 	if err != nil {
-		return err
+		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("download returned HTTP %d", resp.StatusCode)
+		return "", fmt.Errorf("download returned HTTP %d", resp.StatusCode)
 	}
 
 	f, err := os.Create(dest)
 	if err != nil {
-		return err
+		return "", err
 	}
-	defer f.Close()
+	defer func() {
+		_ = f.Close()
+	}()
+	// Hashing the bytes on their way to disk also catches a body truncated by the
+	// size limit, which would otherwise extract as a corrupt archive.
 	const maxSize = 100 * 1024 * 1024
-	_, err = io.Copy(f, io.LimitReader(resp.Body, maxSize))
-	return err
+	sum := sha256.New()
+	if _, err := io.Copy(io.MultiWriter(f, sum), io.LimitReader(resp.Body, maxSize)); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(sum.Sum(nil)), nil
 }
 
 func writeFile(dest string, r io.Reader) error {
@@ -209,7 +252,9 @@ func writeFile(dest string, r io.Reader) error {
 	if err != nil {
 		return err
 	}
-	defer out.Close()
+	defer func() {
+		_ = out.Close()
+	}()
 	const maxSize = 200 * 1024 * 1024
 	_, err = io.Copy(out, io.LimitReader(r, maxSize))
 	return err
@@ -221,7 +266,9 @@ func extractZipEntry(archivePath, wantBase, dest string) error {
 	if err != nil {
 		return err
 	}
-	defer zr.Close()
+	defer func() {
+		_ = zr.Close()
+	}()
 	for _, zf := range zr.File {
 		if filepath.Base(zf.Name) != wantBase {
 			continue
@@ -230,8 +277,8 @@ func extractZipEntry(archivePath, wantBase, dest string) error {
 		if err != nil {
 			return err
 		}
-		defer rc.Close()
-		return writeFile(dest, rc)
+		_ = writeFile(dest, rc)
+		_ = rc.Close()
 	}
 	return fmt.Errorf("%q not found in archive", wantBase)
 }
@@ -241,12 +288,16 @@ func extractTarGz(archivePath, wantBase, dest string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() {
+		_ = f.Close()
+	}()
 	gz, err := gzip.NewReader(f)
 	if err != nil {
 		return err
 	}
-	defer gz.Close()
+	defer func() {
+		_ = gz.Close()
+	}()
 
 	tr := tar.NewReader(gz)
 	for {
