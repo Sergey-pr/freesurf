@@ -277,8 +277,9 @@ func extractZipEntry(archivePath, wantBase, dest string) error {
 		if err != nil {
 			return err
 		}
-		_ = writeFile(dest, rc)
+		err = writeFile(dest, rc)
 		_ = rc.Close()
+		return err
 	}
 	return fmt.Errorf("%q not found in archive", wantBase)
 }
