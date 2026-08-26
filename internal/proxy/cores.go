@@ -4,9 +4,12 @@ package proxy
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
+	"sync"
 
 	"freesurf/internal/paths"
 )
@@ -19,6 +22,61 @@ import (
 
 //go:generate go run freesurf/cmd/fetchcores
 
+// embeddedDigests caches the SHA-256 of each embedded core, which cannot change
+// while the app runs.
+var embeddedDigests sync.Map
+
+// IsEmbeddedCore reports whether the binary at path is byte-identical to the core
+// embedded in this build. This is what decides a core is trustworthy, so it must
+// not run the binary to find out - <data>/bin is user-writable, and on macOS the
+// file it holds is what gets copied into the root-owned helper directory.
+func IsEmbeddedCore(name, path string) bool {
+	want, err := embeddedDigest(name)
+	if err != nil {
+		return false
+	}
+	got, err := fileDigest(path)
+	return err == nil && got == want
+}
+
+func embeddedDigest(name string) (string, error) {
+	if sum, ok := embeddedDigests.Load(name); ok {
+		return sum.(string), nil
+	}
+	f, err := coresFS.Open(coresSubdir + "/" + name)
+	if err != nil {
+		return "", err
+	}
+	defer func() {
+		_ = f.Close()
+	}()
+	sum, err := hashReader(f)
+	if err != nil {
+		return "", err
+	}
+	embeddedDigests.Store(name, sum)
+	return sum, nil
+}
+
+func fileDigest(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer func() {
+		_ = f.Close()
+	}()
+	return hashReader(f)
+}
+
+func hashReader(r io.Reader) (string, error) {
+	h := sha256.New()
+	if _, err := io.Copy(h, r); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
 // installEmbeddedCore writes the embedded core binary (base name without .exe,
 // e.g. paths.SingboxName) to dest as an executable.
 func installEmbeddedCore(name, dest string) error {
@@ -26,7 +84,9 @@ func installEmbeddedCore(name, dest string) error {
 	if err != nil {
 		return fmt.Errorf("%s core is not embedded in this build (run `go generate ./internal/proxy`, or build via `task build`, and rebuild): %w", name, err)
 	}
-	defer f.Close()
+	defer func() {
+		_ = f.Close()
+	}()
 	return writeExecutable(dest, f)
 }
 
@@ -51,14 +111,14 @@ func ReinstallCores(ctx context.Context) error {
 	if err := installEmbeddedCore(paths.SingboxName, sb); err != nil {
 		return err
 	}
-	if !coreVersionOK(sb) {
-		return fmt.Errorf("reinstalled core did not report version %s", RequiredCoreVersion)
+	if !IsEmbeddedCore(paths.SingboxName, sb) {
+		return fmt.Errorf("reinstalled sing-box does not match the core embedded in this build")
 	}
 	if err := installEmbeddedCore(paths.XrayName, xr); err != nil {
 		return err
 	}
-	if !xrayVersionOK(xr) {
-		return fmt.Errorf("reinstalled Xray did not report version %s", RequiredXrayVersion)
+	if !IsEmbeddedCore(paths.XrayName, xr) {
+		return fmt.Errorf("reinstalled Xray does not match the core embedded in this build")
 	}
 	return reinstallWintun(ctx)
 }
@@ -68,7 +128,9 @@ func writeExecutable(dest string, r io.Reader) error {
 	if err != nil {
 		return err
 	}
-	defer out.Close()
+	defer func() {
+		_ = out.Close()
+	}()
 	const maxSize = 200 * 1024 * 1024
 	_, err = io.Copy(out, io.LimitReader(r, maxSize))
 	return err

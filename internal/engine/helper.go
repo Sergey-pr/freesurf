@@ -3,56 +3,57 @@ package engine
 import (
 	"fmt"
 	"os"
-	"strings"
 	"time"
 
 	"freesurf/internal/paths"
 )
 
-// startTunnel signals the privileged helper to bring the tunnel up by creating the
-// sentinel file it watches. Pure Go, no privileges, no prompt.
-func startTunnel() error {
-	sp, err := paths.Sentinel()
+// startTunnel asks the privileged supervisor to bring the tunnel up by writing the
+// request file it watches, and returns the nonce naming this run. serverIP is the
+// address Xray dials, pinned so the supervisor can route Xray's own traffic out
+// directly. Pure Go, no privileges, no prompt.
+func startTunnel(serverIP string) (string, error) {
+	path, err := paths.Sentinel()
 	if err != nil {
-		return err
+		return "", err
 	}
-	return os.WriteFile(sp, []byte("run\n"), 0644)
+	nonce, err := newNonce()
+	if err != nil {
+		return "", err
+	}
+	if err := writeRequest(path, tunnelRequest{Nonce: nonce, ServerIP: serverIP}); err != nil {
+		return "", err
+	}
+	return nonce, nil
 }
 
-// stopTunnel signals the helper to stop by removing the sentinel file.
+// stopTunnel withdraws the request, which the supervisor answers by stopping the
+// core within ~1s.
 func stopTunnel() {
-	if sp, err := paths.Sentinel(); err == nil {
-		_ = os.Remove(sp)
+	if path, err := paths.Sentinel(); err == nil {
+		_ = os.Remove(path)
 	}
 }
 
-// ClearSentinel removes the run flag so the tunnel is down - used at startup to
-// recover from a stale sentinel left by a previous crash.
+// ClearSentinel withdraws any leftover request so the tunnel is down - used at
+// startup to recover from one left by a previous crash.
 func ClearSentinel() { stopTunnel() }
 
-// waitTunnelUp polls the core log until sing-box reports it started, a fatal error
-// appears, or the timeout elapses.
-func waitTunnelUp(logPath string, timeout time.Duration) error {
+// waitTunnelUp polls the supervisor's status file until it reports on this run.
+// Reports from earlier runs are ignored, so a stale success can't be mistaken for
+// this one.
+func waitTunnelUp(path, nonce string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		data, _ := os.ReadFile(logPath)
-		s := string(data)
-		if line := firstMatch(s, "FATAL"); line != "" {
-			return fmt.Errorf("sing-box failed to start: %s", line)
+		if st, ok := readStatus(path); ok && st.Nonce == nonce {
+			switch st.State {
+			case tunnelRunning:
+				return nil
+			case tunnelFailed:
+				return st.err()
+			}
 		}
-		if strings.Contains(s, "sing-box started") || strings.Contains(s, "started at utun") || strings.Contains(s, "started at tun") {
-			return nil
-		}
-		time.Sleep(300 * time.Millisecond)
+		time.Sleep(200 * time.Millisecond)
 	}
 	return fmt.Errorf("timed out waiting for the tunnel to come up (see logs)")
-}
-
-func firstMatch(text, sub string) string {
-	for _, line := range strings.Split(text, "\n") {
-		if strings.Contains(line, sub) {
-			return strings.TrimSpace(line)
-		}
-	}
-	return ""
 }

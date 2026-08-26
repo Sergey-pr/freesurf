@@ -196,10 +196,12 @@ func (e *Engine) Connect(node *store.Node) (ConnState, error) {
 	if err != nil {
 		return e.fail(node.ID, err)
 	}
-	cfg, err := e.deps.writeSingboxConfig(serverIP)
+	cfg, err := e.deps.singboxConfig(serverIP)
 	if err != nil {
 		return e.fail(node.ID, err)
 	}
+	// A pre-flight on the document the supervisor will generate: it builds its own
+	// copy from the same inputs, so a failure here is a failure there.
 	if err := e.deps.checkConfig(bin, cfg); err != nil {
 		return e.fail(node.ID, err)
 	}
@@ -231,15 +233,15 @@ func (e *Engine) Connect(node *store.Node) (ConnState, error) {
 		stopProcess(xray)
 		return e.fail(node.ID, err)
 	}
-	_ = os.Remove(logPath) // start with a fresh log
 
 	e.setState(ConnState{Status: StatusConnecting, NodeID: node.ID, Message: "Starting tunnel…"})
 	e.logf("Starting tunnel…")
-	if err := e.deps.startTunnel(); err != nil {
+	nonce, err := e.deps.startTunnel(serverIP)
+	if err != nil {
 		stopProcess(xray)
 		return e.fail(node.ID, err)
 	}
-	if err := e.deps.waitTunnelUp(logPath, 12*time.Second); err != nil {
+	if err := e.deps.waitTunnelUp(nonce, 12*time.Second); err != nil {
 		e.deps.stopTunnel()
 		stopProcess(xray)
 		return e.fail(node.ID, err)
@@ -265,9 +267,12 @@ func (e *Engine) fail(nodeID int64, err error) (ConnState, error) {
 	return state, err
 }
 
+// xrayStopGrace is short: Xray holds no system state, so there is little to unwind.
+const xrayStopGrace = 2 * time.Second
+
 func stopProcess(p process) {
 	if p != nil {
-		p.Kill()
+		p.Stop(xrayStopGrace)
 	}
 }
 
@@ -400,6 +405,9 @@ func (e *Engine) tailCore(path string, stop chan struct{}) {
 			f, err := os.Open(path)
 			if err != nil {
 				continue
+			}
+			if st, err := f.Stat(); err == nil && st.Size() < offset {
+				offset = 0
 			}
 			if _, err := f.Seek(offset, io.SeekStart); err != nil {
 				_ = f.Close()

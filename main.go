@@ -15,9 +15,10 @@ import (
 var assets embed.FS
 
 func main() {
-	// On Windows the same binary doubles as the privileged TUN service and its
-	// elevated install/uninstall worker. When launched in one of those modes,
-	// handle it and exit before touching Wails. No-op elsewhere.
+	// The same binary doubles as the privileged tunnel supervisor - launchd runs a
+	// root-owned copy on macOS, the SCM runs one on Windows - and, on Windows, as
+	// the elevated install/uninstall worker. When launched in one of those modes,
+	// handle it and exit before touching Wails.
 	if engine.MaybeRunService() {
 		return
 	}

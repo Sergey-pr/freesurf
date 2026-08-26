@@ -3,7 +3,6 @@ package engine
 import (
 	"context"
 	"errors"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -21,7 +20,7 @@ type fakeProcess struct {
 	exited bool
 }
 
-func (p *fakeProcess) Kill() {
+func (p *fakeProcess) Stop(time.Duration) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.killed++
@@ -59,6 +58,19 @@ type harness struct {
 	logEvents  [][]string
 	tunnelUp   int
 	tunnelDown int
+	serverIP   string
+}
+
+func (h *harness) setServerIP(ip string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.serverIP = ip
+}
+
+func (h *harness) pinnedIP() string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.serverIP
 }
 
 func newHarness(t *testing.T) *harness {
@@ -70,20 +82,24 @@ func newHarness(t *testing.T) *harness {
 		monitorTick: 2 * time.Millisecond,
 		tailTick:    2 * time.Millisecond,
 		deps: deps{
-			ensureCore:         func(context.Context) (string, error) { return "sing-box", nil },
-			ensureXray:         func(context.Context) (string, error) { return "xray", nil },
-			writeXrayConfig:    func(*store.Node) (string, string, error) { return h.path("xray.json"), "192.0.2.1", nil },
-			writeSingboxConfig: func(string) (string, error) { return h.path("config.json"), nil },
-			checkConfig:        func(string, string) error { return nil },
-			helperInstalled:    func() bool { return true },
-			ensureHelper:       func(string) error { return nil },
-			coreLog:            func() (string, error) { return h.path("sing-box.log"), nil },
-			xrayLog:            func() (string, error) { return h.path("xray.log"), nil },
-			runXray:            func(string, string, string) (process, error) { return h.newProc(), nil },
-			startTunnel:        func() error { h.bump(&h.tunnelUp); return nil },
-			waitTunnelUp:       func(string, time.Duration) error { return nil },
-			stopTunnel:         func() { h.bump(&h.tunnelDown) },
-			emit:               h.emit,
+			ensureCore:      func(context.Context) (string, error) { return "sing-box", nil },
+			ensureXray:      func(context.Context) (string, error) { return "xray", nil },
+			writeXrayConfig: func(*store.Node) (string, string, error) { return h.path("xray.json"), "192.0.2.1", nil },
+			singboxConfig:   func(string) ([]byte, error) { return []byte("{}"), nil },
+			checkConfig:     func(string, []byte) error { return nil },
+			helperInstalled: func() bool { return true },
+			ensureHelper:    func(string) error { return nil },
+			coreLog:         func() (string, error) { return h.path("sing-box.log"), nil },
+			xrayLog:         func() (string, error) { return h.path("xray.log"), nil },
+			runXray:         func(string, string, string) (process, error) { return h.newProc(), nil },
+			startTunnel: func(serverIP string) (string, error) {
+				h.bump(&h.tunnelUp)
+				h.setServerIP(serverIP)
+				return "0123456789abcdef", nil
+			},
+			waitTunnelUp: func(string, time.Duration) error { return nil },
+			stopTunnel:   func() { h.bump(&h.tunnelDown) },
+			emit:         h.emit,
 		},
 	}
 	return h
@@ -187,6 +203,10 @@ func TestConnectBringsTunnelUp(t *testing.T) {
 	if up, down := h.counts(); up != 1 || down != 0 {
 		t.Fatalf("tunnel start/stop = %d/%d, want 1/0", up, down)
 	}
+	// The supervisor needs the pinned IP to route Xray's own traffic out directly.
+	if ip := h.pinnedIP(); ip != "192.0.2.1" {
+		t.Fatalf("server IP handed to the supervisor = %q, want 192.0.2.1", ip)
+	}
 	last := h.statuses()[len(h.statuses())-1]
 	if last != StatusConnected {
 		t.Fatalf("last emitted status = %q, want connected", last)
@@ -207,7 +227,7 @@ func TestConnectFailureCleansUp(t *testing.T) {
 		},
 		{
 			name:     "config check fails",
-			breakDep: func(d *deps, err error) { d.checkConfig = func(string, string) error { return err } },
+			breakDep: func(d *deps, err error) { d.checkConfig = func(string, []byte) error { return err } },
 		},
 		{
 			name:     "helper install fails",
@@ -215,7 +235,7 @@ func TestConnectFailureCleansUp(t *testing.T) {
 		},
 		{
 			name:       "tunnel start fails",
-			breakDep:   func(d *deps, err error) { d.startTunnel = func() error { return err } },
+			breakDep:   func(d *deps, err error) { d.startTunnel = func(string) (string, error) { return "", err } },
 			wantKilled: true,
 		},
 		{
@@ -398,22 +418,36 @@ func TestLogStreamingIsGatedAndBatched(t *testing.T) {
 }
 
 func TestWaitTunnelUp(t *testing.T) {
+	const nonce = "0123456789abcdef"
 	tests := []struct {
 		name    string
-		log     string
+		status  *tunnelStatus
 		wantErr string
 	}{
-		{name: "started", log: "+0300 2026-06-25 11:46:08 INFO sing-box started at utun4\n"},
-		{name: "fatal", log: "FATAL start service: bind: permission denied\n", wantErr: "sing-box failed to start"},
-		{name: "silent", log: "nothing interesting\n", wantErr: "timed out"},
+		{name: "running", status: &tunnelStatus{Nonce: nonce, State: tunnelRunning}},
+		{
+			name:    "failed",
+			status:  &tunnelStatus{Nonce: nonce, State: tunnelFailed, Message: "bind: permission denied"},
+			wantErr: "permission denied",
+		},
+		{name: "no status at all", wantErr: "timed out"},
+		{
+			// A success left by an earlier run must not be read as this one's.
+			name:    "status from another run",
+			status:  &tunnelStatus{Nonce: "fedcba9876543210", State: tunnelRunning},
+			wantErr: "timed out",
+		},
+		{name: "still starting", status: &tunnelStatus{Nonce: nonce, State: tunnelStarting}, wantErr: "timed out"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "sing-box.log")
-			if err := os.WriteFile(path, []byte(tc.log), 0600); err != nil {
-				t.Fatal(err)
+			path := filepath.Join(t.TempDir(), "status.json")
+			if tc.status != nil {
+				if err := writeStatus(path, *tc.status); err != nil {
+					t.Fatal(err)
+				}
 			}
-			err := waitTunnelUp(path, 400*time.Millisecond)
+			err := waitTunnelUp(path, nonce, 400*time.Millisecond)
 			if tc.wantErr == "" {
 				if err != nil {
 					t.Fatalf("waitTunnelUp: %v", err)

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"strings"
+	"path/filepath"
 	"time"
 
 	"freesurf/internal/paths"
@@ -28,26 +28,16 @@ func EnsureXray(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if xrayVersionOK(path) {
+	if IsEmbeddedCore(paths.XrayName, path) {
 		return path, nil
 	}
 	if err := installEmbeddedCore(paths.XrayName, path); err != nil {
 		return "", err
 	}
-	if !xrayVersionOK(path) {
-		return "", fmt.Errorf("embedded Xray did not report version %s", RequiredXrayVersion)
+	if !IsEmbeddedCore(paths.XrayName, path) {
+		return "", fmt.Errorf("installed Xray does not match the core embedded in this build")
 	}
 	return path, nil
-}
-
-func xrayVersionOK(path string) bool {
-	if _, err := os.Stat(path); err != nil {
-		return false
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, path, "version").CombinedOutput()
-	return err == nil && strings.Contains(string(out), RequiredXrayVersion)
 }
 
 // Process is a running core process. Exit is reported through a channel closed
@@ -58,11 +48,24 @@ type Process struct {
 	done chan struct{}
 }
 
-// Kill stops the process. Safe to call more than once, or after it has exited.
-func (p *Process) Kill() {
-	if p != nil && p.cmd.Process != nil {
-		_ = p.cmd.Process.Kill()
+// Stop shuts the process down, asking politely first and waiting up to grace
+// before killing it. sing-box only unwinds the routes and DNS settings auto_route
+// installed if it gets that chance - killed outright, it leaves the machine routed
+// into a tun device that no longer exists, which breaks all networking until the
+// system cleans up. Safe to call more than once, or after the process has exited.
+func (p *Process) Stop(grace time.Duration) {
+	if p == nil || p.cmd.Process == nil {
+		return
 	}
+	if requestStop(p.cmd.Process) {
+		select {
+		case <-p.done:
+			return
+		case <-time.After(grace):
+		}
+	}
+	_ = p.cmd.Process.Kill()
+	<-p.done
 }
 
 // Exited reports whether the process has terminated.
@@ -75,14 +78,28 @@ func (p *Process) Exited() bool {
 	}
 }
 
+// RunSingbox starts the sing-box core writing to logPath, returning the running
+// process. Called by the privileged supervisor; cmd.Dir is the binary's own
+// directory so a sibling wintun.dll is found on Windows.
+func RunSingbox(binPath, cfgPath, logPath string) (*Process, error) {
+	return runCore(binPath, filepath.Dir(binPath), cfgPath, logPath)
+}
+
 // RunXray starts the (unprivileged) Xray process writing to logPath, returning the
 // running process so the caller can supervise and stop it.
 func RunXray(binPath, cfgPath, logPath string) (*Process, error) {
+	return runCore(binPath, "", cfgPath, logPath)
+}
+
+// runCore starts a core binary with `run -c <cfgPath>`, truncating logPath and
+// sending both its streams there.
+func runCore(binPath, dir, cfgPath, logPath string) (*Process, error) {
 	logFile, err := os.Create(logPath)
 	if err != nil {
 		return nil, err
 	}
 	cmd := exec.Command(binPath, "run", "-c", cfgPath)
+	cmd.Dir = dir
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	cmd.SysProcAttr = hiddenProcAttr() // no console window on Windows

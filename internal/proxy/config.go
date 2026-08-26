@@ -54,11 +54,14 @@ func ipToCIDR(ip net.IP) string {
 	return ip.String() + "/128"
 }
 
-// WriteSingboxConfig writes the sing-box config (TUN in → local SOCKS out to Xray)
-// and returns its path. serverIP is the pinned proxy-server address (from
-// WriteXrayConfig) so Xray's own traffic to it can be routed out directly, breaking
-// the routing loop.
-func WriteSingboxConfig(serverIP string) (string, error) {
+// SingboxConfig builds the sing-box config document (TUN in → local SOCKS out to
+// Xray). serverIP is the pinned proxy-server address (from WriteXrayConfig) so
+// Xray's own traffic to it can be routed out directly, breaking the routing loop.
+//
+// It returns the document rather than writing it: the privileged supervisor
+// generates its own copy into a root-owned directory, because a config that the
+// unprivileged side can rewrite is a config root must not read.
+func SingboxConfig(serverIP string) ([]byte, error) {
 	stack, strictRoute := tunOptions()
 
 	// Break the routing loop: Xray's connection to the proxy server must go out
@@ -110,7 +113,7 @@ func WriteSingboxConfig(serverIP string) (string, error) {
 			"rules":                   routeRules,
 		},
 	}
-	return writeJSON(cfg, paths.Config)
+	return json.MarshalIndent(cfg, "", "  ")
 }
 
 // WriteXrayConfig builds the Xray config (SOCKS in + the node's outbound) and

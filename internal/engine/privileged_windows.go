@@ -4,8 +4,8 @@ package engine
 
 import (
 	"fmt"
+	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -27,11 +27,15 @@ import (
 // the app starts/stops the tunnel by creating/removing a file - no further prompts,
 // even across app restarts and reboots.
 //
-// The same freesurf.exe binary is reused as the service: the SCM launches it with
-// the flagRunService argument and MaybeRunService() routes it into svc.Run before
-// the Wails GUI ever starts. Because the service runs as LocalSystem (which can't
-// resolve the launching user's %AppData%), the absolute paths it needs are baked
-// into the service's command line at install time.
+// The same freesurf.exe binary is reused as the service, but a root-owned copy of
+// it: the elevated installer copies this exe and the core into %ProgramData%\FreeSurf
+// and locks that directory down to SYSTEM and Administrators, so LocalSystem never
+// executes anything an unprivileged process could rewrite. The SCM launches the copy
+// with flagRunService and MaybeRunService() routes it into svc.Run before the Wails
+// GUI ever starts.
+//
+// Everything else the service needs lives in the same directory, so only the user's
+// request file - which the supervisor validates - is passed on the command line.
 const (
 	serviceName        = "FreeSurfTunnel"
 	serviceDisplayName = "FreeSurf Tunnel Helper"
@@ -39,48 +43,32 @@ const (
 
 	// Bump when the service definition or supervisor behaviour changes to force a
 	// one-time reinstall.
-	helperVersion = "2"
+	helperVersion = "3"
 
 	// Internal flags handled by MaybeRunService before the GUI starts.
-	flagRunService       = "--freesurf-tun-service"
 	flagInstallService   = "--freesurf-install-service"
 	flagUninstallService = "--freesurf-uninstall-service"
+
+	// flagSingboxSource names the core the elevated installer copies into the
+	// root-owned directory; it is only ever read by that installer.
+	flagSingboxSource = "--singbox-source"
 )
 
-// serviceArgs are the absolute paths baked into the service command line so the
-// LocalSystem supervisor can find everything without resolving the user profile.
-type serviceArgs struct {
-	singbox  string
-	config   string
-	log      string
-	sentinel string
-}
-
-func parseServiceArgs(args []string) serviceArgs {
-	var o serviceArgs
-	for i := 0; i+1 < len(args); i += 2 {
-		switch args[i] {
-		case "--singbox":
-			o.singbox = args[i+1]
-		case "--config":
-			o.config = args[i+1]
-		case "--log":
-			o.log = args[i+1]
-		case "--sentinel":
-			o.sentinel = args[i+1]
-		}
-	}
-	return o
-}
-
-func (o serviceArgs) flags() []string {
-	return []string{
-		"--singbox", o.singbox,
-		"--config", o.config,
-		"--log", o.log,
-		"--sentinel", o.sentinel,
+func windowsRootFiles() rootFiles {
+	dir := programDataDir()
+	return rootFiles{
+		exe:     filepath.Join(dir, "freesurf.exe"),
+		singbox: filepath.Join(dir, "sing-box.exe"),
+		config:  filepath.Join(dir, "config.json"),
+		log:     filepath.Join(dir, "sing-box.log"),
+		status:  filepath.Join(dir, "status.json"),
 	}
 }
+
+// coreLogPath and statusPath are what the app reads: the log to display, the status
+// to learn whether the tunnel came up.
+func coreLogPath() (string, error) { return windowsRootFiles().log, nil }
+func statusPath() string           { return windowsRootFiles().status }
 
 // ---- public API (mirrors privileged_darwin.go) -----------------------------
 
@@ -143,21 +131,11 @@ func EnsureHelper(singboxBin string) error {
 		return nil
 	}
 
-	cfg, err := paths.Config()
+	request, err := paths.Sentinel()
 	if err != nil {
 		return err
 	}
-	logPath, err := paths.CoreLog()
-	if err != nil {
-		return err
-	}
-	sentinel, err := paths.Sentinel()
-	if err != nil {
-		return err
-	}
-
-	opts := serviceArgs{singbox: singboxBin, config: cfg, log: logPath, sentinel: sentinel}
-	return runElevated(append([]string{flagInstallService}, opts.flags()...))
+	return runElevated([]string{flagInstallService, flagSingboxSource, singboxBin, flagRequest, request})
 }
 
 // UninstallHelper removes the service (one UAC prompt).
@@ -180,8 +158,7 @@ func MaybeRunService() bool {
 	}
 	switch os.Args[1] {
 	case flagRunService:
-		opts := parseServiceArgs(os.Args[2:])
-		_ = svc.Run(serviceName, &tunnelService{opts: opts})
+		_ = svc.Run(serviceName, &tunnelService{request: parseRequestPath(os.Args[2:])})
 		return true
 	case flagInstallService:
 		if err := installServiceWorker(os.Args[2:]); err != nil {
@@ -200,8 +177,18 @@ func MaybeRunService() bool {
 // ---- elevated install / uninstall workers ----------------------------------
 
 func installServiceWorker(args []string) error {
-	opts := parseServiceArgs(args)
-	exe, err := os.Executable()
+	request := parseRequestPath(args)
+	if request == "" {
+		return fmt.Errorf("no request path given")
+	}
+	source := ""
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == flagSingboxSource {
+			source = args[i+1]
+		}
+	}
+
+	files, err := installRootFiles(source)
 	if err != nil {
 		return err
 	}
@@ -218,11 +205,11 @@ func installServiceWorker(args []string) error {
 		s.Close()
 	}
 
-	s, err := m.CreateService(serviceName, exe, mgr.Config{
+	s, err := m.CreateService(serviceName, files.exe, mgr.Config{
 		DisplayName: serviceDisplayName,
 		Description: serviceDesc,
 		StartType:   mgr.StartAutomatic,
-	}, append([]string{flagRunService}, opts.flags()...)...)
+	}, flagRunService, flagRequest, request)
 	if err != nil {
 		return err
 	}
@@ -281,7 +268,7 @@ func stopAndDelete(s *mgr.Service) error {
 // ---- the service itself -----------------------------------------------------
 
 type tunnelService struct {
-	opts serviceArgs
+	request string
 }
 
 func (t *tunnelService) Execute(_ []string, r <-chan svc.ChangeRequest, status chan<- svc.Status) (bool, uint32) {
@@ -312,94 +299,108 @@ func (t *tunnelService) Execute(_ []string, r <-chan svc.ChangeRequest, status c
 	return false, 0
 }
 
-// coreProc tracks a running sing-box child so the supervisor can detect crashes
-// without racing on exec.Cmd.ProcessState.
-type coreProc struct {
-	cmd  *exec.Cmd
-	done chan struct{}
-}
-
-// supervise keeps sing-box running while the sentinel exists and stops it when the
-// sentinel is removed - the Go port of the macOS supervisor.sh loop.
+// supervise runs the shared supervisor loop: keep sing-box running while the
+// request exists, stop it when it goes away. The loop, the config generation and
+// the status reporting are the same code macOS runs under launchd.
 func (t *tunnelService) supervise(stop <-chan struct{}) {
-	lg := newServiceLogger(t.opts.config)
-	defer lg.Close()
-	lg.Printf("supervisor started (singbox=%s)", t.opts.singbox)
-
-	var cp *coreProc
-	ticker := time.NewTicker(1 * time.Second)
-	defer ticker.Stop()
-
-	stopCore := func() {
-		if cp == nil {
-			return
-		}
-		if cp.cmd.Process != nil {
-			_ = cp.cmd.Process.Kill()
-		}
-		<-cp.done
-		cp = nil
-	}
-	defer stopCore()
-
-	for {
-		// Reap a crashed core so it gets restarted below.
-		if cp != nil {
-			select {
-			case <-cp.done:
-				lg.Printf("sing-box exited")
-				cp = nil
-			default:
-			}
-		}
-
-		select {
-		case <-stop:
-			lg.Printf("supervisor stopping")
-			return
-		case <-ticker.C:
-		}
-
-		switch {
-		case fileExists(t.opts.sentinel) && cp == nil:
-			c, err := t.startCore()
-			if err != nil {
-				lg.Printf("failed to start sing-box: %v", err)
-			} else {
-				cp = c
-				lg.Printf("sing-box started")
-			}
-		case !fileExists(t.opts.sentinel) && cp != nil:
-			lg.Printf("sentinel removed, stopping sing-box")
-			stopCore()
-		}
-	}
+	files := windowsRootFiles()
+	lg, closeLog := supervisorLogger(filepath.Join(programDataDir(), "tun-service.log"))
+	defer closeLog()
+	superviseTunnel(files, t.request, stop, lg)
 }
 
-func (t *tunnelService) startCore() (*coreProc, error) {
-	logFile, err := os.OpenFile(t.opts.log, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+// installRootFiles copies this exe and the core into the root-owned directory and
+// locks it down, so LocalSystem only ever executes files an unprivileged process
+// cannot replace. Runs elevated.
+func installRootFiles(singboxSource string) (rootFiles, error) {
+	files := windowsRootFiles()
+	dir := programDataDir()
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return files, err
+	}
+	if err := restrictToAdmins(dir); err != nil {
+		return files, fmt.Errorf("failed to secure %s: %w", dir, err)
+	}
+
+	exe, err := os.Executable()
 	if err != nil {
-		return nil, err
+		return files, err
+	}
+	if err := copyFile(exe, files.exe); err != nil {
+		return files, fmt.Errorf("failed to copy the app binary: %w", err)
+	}
+	if singboxSource == "" {
+		return files, fmt.Errorf("no sing-box source given")
+	}
+	if err := copyFile(singboxSource, files.singbox); err != nil {
+		return files, fmt.Errorf("failed to copy the core: %w", err)
+	}
+	return files, nil
+}
+
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0755)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	_, err = io.Copy(out, in)
+	return err
+}
+
+// restrictToAdmins replaces the directory's inherited ACL with one granting full
+// access to SYSTEM and Administrators and read/execute to everyone else. Without
+// this, %ProgramData% subdirectories let ordinary users create files, which is the
+// whole hole we are closing.
+func restrictToAdmins(dir string) error {
+	system, err := windows.CreateWellKnownSid(windows.WinLocalSystemSid)
+	if err != nil {
+		return err
+	}
+	admins, err := windows.CreateWellKnownSid(windows.WinBuiltinAdministratorsSid)
+	if err != nil {
+		return err
+	}
+	users, err := windows.CreateWellKnownSid(windows.WinBuiltinUsersSid)
+	if err != nil {
+		return err
 	}
 
-	cmd := exec.Command(t.opts.singbox, "run", "-c", t.opts.config)
-	cmd.Dir = filepath.Dir(t.opts.singbox) // so a sibling wintun.dll is found
-	cmd.Stdout = logFile
-	cmd.Stderr = logFile
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: windows.CREATE_NO_WINDOW}
-
-	if err := cmd.Start(); err != nil {
-		logFile.Close()
-		return nil, err
+	entries := []windows.EXPLICIT_ACCESS{
+		explicitAccess(system, windows.GENERIC_ALL, windows.GRANT_ACCESS),
+		explicitAccess(admins, windows.GENERIC_ALL, windows.GRANT_ACCESS),
+		explicitAccess(users, windows.GENERIC_READ|windows.GENERIC_EXECUTE, windows.GRANT_ACCESS),
 	}
+	acl, err := windows.ACLFromEntries(entries, nil)
+	if err != nil {
+		return err
+	}
+	// PROTECTED_DACL_SECURITY_INFORMATION drops the inherited entries that would
+	// otherwise let Users write here.
+	return windows.SetNamedSecurityInfo(
+		dir,
+		windows.SE_FILE_OBJECT,
+		windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION,
+		nil, nil, acl, nil,
+	)
+}
 
-	cp := &coreProc{cmd: cmd, done: make(chan struct{})}
-	go func() {
-		_ = cmd.Wait()
-		logFile.Close()
-		close(cp.done)
-	}()
-	return cp, nil
+func explicitAccess(sid *windows.SID, mask windows.ACCESS_MASK, mode windows.ACCESS_MODE) windows.EXPLICIT_ACCESS {
+	return windows.EXPLICIT_ACCESS{
+		AccessPermissions: mask,
+		AccessMode:        mode,
+		Inheritance:       windows.SUB_CONTAINERS_AND_OBJECTS_INHERIT,
+		Trustee: windows.TRUSTEE{
+			TrusteeForm:  windows.TRUSTEE_IS_SID,
+			TrusteeType:  windows.TRUSTEE_IS_WELL_KNOWN_GROUP,
+			TrusteeValue: windows.TrusteeValueFromSID(sid),
+		},
+	}
 }
 
 // ---- elevation (re-launch self as admin and wait) ---------------------------
@@ -498,15 +499,20 @@ func programDataDir() string {
 
 func markerPath() string { return filepath.Join(programDataDir(), "helper.version") }
 
-// currentMarker combines the helper version with the current exe path, so the
-// service is reinstalled both on a version bump and when the app moves (its baked
-// command-line path would otherwise be stale).
+// currentMarker combines the helper version with the exe path and the request file
+// baked into the service command line, so the service is reinstalled on a version
+// bump, when the app moves, and for a different user whose request file the
+// installed service would otherwise never watch.
 func currentMarker() (string, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return "", err
 	}
-	return helperVersion + "\n" + exe, nil
+	request, err := paths.Sentinel()
+	if err != nil {
+		return "", err
+	}
+	return helperVersion + "\n" + exe + "\n" + request, nil
 }
 
 func installedMarker() string {
@@ -526,34 +532,4 @@ func writeMarker() error {
 		return err
 	}
 	return os.WriteFile(markerPath(), []byte(want), 0644)
-}
-
-// ---- small helpers ----------------------------------------------------------
-
-func fileExists(p string) bool {
-	_, err := os.Stat(p)
-	return err == nil
-}
-
-type serviceLogger struct{ f *os.File }
-
-// newServiceLogger writes supervisor diagnostics next to the core log so service
-// problems are visible (the service has no console).
-func newServiceLogger(configPath string) *serviceLogger {
-	p := filepath.Join(filepath.Dir(configPath), "tun-service.log")
-	f, _ := os.OpenFile(p, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-	return &serviceLogger{f: f}
-}
-
-func (l *serviceLogger) Printf(format string, a ...any) {
-	if l.f == nil {
-		return
-	}
-	fmt.Fprintf(l.f, "%s  %s\n", time.Now().Format("15:04:05"), fmt.Sprintf(format, a...))
-}
-
-func (l *serviceLogger) Close() {
-	if l.f != nil {
-		l.f.Close()
-	}
 }

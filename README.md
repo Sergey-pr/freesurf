@@ -44,7 +44,7 @@ A connection runs **two cores**, split by privilege:
 - **Privileges:** the TUN core needs root / the TUN device, so it runs via a helper
   installed once — the only prompt (password / UAC). macOS uses a launchd
   LaunchDaemon; Windows a native Go service (LocalSystem) + Wintun. After that,
-  Start/Stop is just a sentinel file, so it won't re-prompt.
+  Start/Stop is just a request file, so it won't re-prompt.
 
 ## Stack
 

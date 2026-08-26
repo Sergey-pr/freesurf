@@ -3,6 +3,7 @@
 package proxy
 
 import (
+	"os"
 	"syscall"
 
 	"golang.org/x/sys/windows"
@@ -14,3 +15,7 @@ import (
 func hiddenProcAttr() *syscall.SysProcAttr {
 	return &syscall.SysProcAttr{HideWindow: true, CreationFlags: windows.CREATE_NO_WINDOW}
 }
+
+// requestStop has no Windows counterpart: a console-less child cannot be asked to
+// exit, so callers fall straight through to killing it.
+func requestStop(*os.Process) bool { return false }

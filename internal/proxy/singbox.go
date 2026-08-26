@@ -31,33 +31,38 @@ func EnsureCore(ctx context.Context) (string, error) {
 	if err := EnsureWintun(ctx); err != nil {
 		return "", err
 	}
-	if coreVersionOK(path) {
+	if IsEmbeddedCore(paths.SingboxName, path) {
 		return path, nil
 	}
 	if err := installEmbeddedCore(paths.SingboxName, path); err != nil {
 		return "", err
 	}
-	if !coreVersionOK(path) {
-		return "", fmt.Errorf("embedded core did not report version %s", RequiredCoreVersion)
+	if !IsEmbeddedCore(paths.SingboxName, path) {
+		return "", fmt.Errorf("installed sing-box does not match the core embedded in this build")
 	}
 	return path, nil
 }
 
-func coreVersionOK(path string) bool {
-	if _, err := os.Stat(path); err != nil {
-		return false
+// CheckConfig validates a sing-box config document with `sing-box check`. It takes
+// the document, not a path, so the caller has nothing to leave lying around: this
+// is a pre-flight on what the supervisor will generate, not the config root runs.
+func CheckConfig(binPath string, cfg []byte) error {
+	f, err := os.CreateTemp("", "freesurf-check-*.json")
+	if err != nil {
+		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, path, "version").CombinedOutput()
-	return err == nil && strings.Contains(string(out), RequiredCoreVersion)
-}
+	defer func() {
+		_ = os.Remove(f.Name())
+	}()
+	if _, err := f.Write(cfg); err != nil {
+		_ = f.Close()
+		return err
+	}
+	_ = f.Close()
 
-// CheckConfig validates a sing-box config with `sing-box check`.
-func CheckConfig(binPath, cfgPath string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, binPath, "check", "-c", cfgPath).CombinedOutput()
+	out, err := exec.CommandContext(ctx, binPath, "check", "-c", f.Name()).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("sing-box check failed: %s", strings.TrimSpace(string(out)))
 	}
