@@ -8,10 +8,7 @@ import (
 	"freesurf/internal/paths"
 )
 
-// startTunnel asks the privileged supervisor to bring the tunnel up by writing the
-// request file it watches, and returns the nonce naming this run. serverIP is the
-// address Xray dials, pinned so the supervisor can route Xray's own traffic out
-// directly. Pure Go, no privileges, no prompt.
+// startTunnel requests the tunnel for the pinned serverIP, returning this run's nonce.
 func startTunnel(serverIP string) (string, error) {
 	path, err := paths.Sentinel()
 	if err != nil {
@@ -27,21 +24,17 @@ func startTunnel(serverIP string) (string, error) {
 	return nonce, nil
 }
 
-// stopTunnel withdraws the request, which the supervisor answers by stopping the
-// core within ~1s.
+// stopTunnel withdraws the request; the supervisor stops the core within ~1s.
 func stopTunnel() {
 	if path, err := paths.Sentinel(); err == nil {
 		_ = os.Remove(path)
 	}
 }
 
-// ClearSentinel withdraws any leftover request so the tunnel is down - used at
-// startup to recover from one left by a previous crash.
+// ClearSentinel drops a request left by a crash, so startup begins disconnected.
 func ClearSentinel() { stopTunnel() }
 
-// waitTunnelUp polls the supervisor's status file until it reports on this run.
-// Reports from earlier runs are ignored, so a stale success can't be mistaken for
-// this one.
+// waitTunnelUp polls the status for this nonce, ignoring reports from other runs.
 func waitTunnelUp(path, nonce string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {

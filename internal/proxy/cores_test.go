@@ -32,8 +32,6 @@ func TestInstallEmbeddedCore(t *testing.T) {
 	}
 }
 
-// The whole point of IsEmbeddedCore is that a binary which merely looks right is
-// still rejected, so a tampered <data>/bin never reaches the privileged helper.
 func TestIsEmbeddedCore(t *testing.T) {
 	dir := t.TempDir()
 	dest := filepath.Join(dir, paths.SingboxName)

@@ -12,8 +12,7 @@ import (
 	"freesurf/internal/store"
 )
 
-// fakeProcess stands in for the Xray backend so the lifecycle can be driven
-// without spawning a real process.
+// fakeProcess stands in for the Xray backend, so no real process is spawned.
 type fakeProcess struct {
 	mu     sync.Mutex
 	killed int
@@ -348,8 +347,7 @@ func TestReconnectClosesPreviousGeneration(t *testing.T) {
 	h.e.Disconnect()
 }
 
-// Connect and Disconnect racing each other must stay race-free and end in a
-// consistent state. Rejecting a concurrent Connect outright is M1-T4.
+// Connect and Disconnect racing must stay race-free and end in a consistent state.
 func TestConcurrentConnectDisconnect(t *testing.T) {
 	h := newHarness(t)
 

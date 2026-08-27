@@ -22,14 +22,10 @@ import (
 
 //go:generate go run freesurf/cmd/fetchcores
 
-// embeddedDigests caches the SHA-256 of each embedded core, which cannot change
-// while the app runs.
+// embeddedDigests caches each embedded core's SHA-256, which cannot change.
 var embeddedDigests sync.Map
 
-// IsEmbeddedCore reports whether the binary at path is byte-identical to the core
-// embedded in this build. This is what decides a core is trustworthy, so it must
-// not run the binary to find out - <data>/bin is user-writable, and on macOS the
-// file it holds is what gets copied into the root-owned helper directory.
+// IsEmbeddedCore digests the binary at path against this build's embedded core.
 func IsEmbeddedCore(name, path string) bool {
 	want, err := embeddedDigest(name)
 	if err != nil {
@@ -124,7 +120,7 @@ func ReinstallCores(ctx context.Context) error {
 }
 
 func writeExecutable(dest string, r io.Reader) error {
-	out, err := os.OpenFile(dest, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0755)
+	out, err := os.OpenFile(dest, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0700)
 	if err != nil {
 		return err
 	}

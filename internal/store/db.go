@@ -33,6 +33,10 @@ func InitDB() error {
 	if err := sqlDB.Ping(); err != nil {
 		return err
 	}
+	// SQLite creates this world-readable, and the node URIs in it carry credentials.
+	if err := paths.RestrictFile(dbPath); err != nil {
+		return err
+	}
 	if err := migrateDB(sqlDB); err != nil {
 		return err
 	}

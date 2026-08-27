@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -40,19 +41,13 @@ func EnsureXray(ctx context.Context) (string, error) {
 	return path, nil
 }
 
-// Process is a running core process. Exit is reported through a channel closed
-// by the wait goroutine, so a supervisor never reads exec.Cmd fields that the
-// same goroutine writes.
+// Process is a running core, whose exit is reported by a channel, not exec.Cmd fields.
 type Process struct {
 	cmd  *exec.Cmd
 	done chan struct{}
 }
 
-// Stop shuts the process down, asking politely first and waiting up to grace
-// before killing it. sing-box only unwinds the routes and DNS settings auto_route
-// installed if it gets that chance - killed outright, it leaves the machine routed
-// into a tun device that no longer exists, which breaks all networking until the
-// system cleans up. Safe to call more than once, or after the process has exited.
+// Stop signals the process, killing it after grace; sing-box needs it to unwind routes.
 func (p *Process) Stop(grace time.Duration) {
 	if p == nil || p.cmd.Process == nil {
 		return
@@ -78,24 +73,27 @@ func (p *Process) Exited() bool {
 	}
 }
 
-// RunSingbox starts the sing-box core writing to logPath, returning the running
-// process. Called by the privileged supervisor; cmd.Dir is the binary's own
-// directory so a sibling wintun.dll is found on Windows.
+// RunSingbox starts sing-box from its own directory, so Windows finds wintun.dll.
 func RunSingbox(binPath, cfgPath, logPath string) (*Process, error) {
-	return runCore(binPath, filepath.Dir(binPath), cfgPath, logPath)
+	// 0644: the unprivileged app tails this out of the root-owned directory.
+	return runCore(binPath, filepath.Dir(binPath), cfgPath, logPath, 0644)
 }
 
 // RunXray starts the (unprivileged) Xray process writing to logPath, returning the
 // running process so the caller can supervise and stop it.
 func RunXray(binPath, cfgPath, logPath string) (*Process, error) {
-	return runCore(binPath, "", cfgPath, logPath)
+	return runCore(binPath, "", cfgPath, logPath, 0600)
 }
 
-// runCore starts a core binary with `run -c <cfgPath>`, truncating logPath and
-// sending both its streams there.
-func runCore(binPath, dir, cfgPath, logPath string) (*Process, error) {
-	logFile, err := os.Create(logPath)
+// runCore runs a core with `run -c <cfgPath>`, truncating logPath for its output.
+func runCore(binPath, dir, cfgPath, logPath string, logPerm os.FileMode) (*Process, error) {
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, logPerm)
 	if err != nil {
+		return nil, err
+	}
+	// O_CREATE only sets the mode on a file it creates.
+	if err := logFile.Chmod(logPerm); err != nil && !errors.Is(err, errors.ErrUnsupported) {
+		_ = logFile.Close()
 		return nil, err
 	}
 	cmd := exec.Command(binPath, "run", "-c", cfgPath)

@@ -12,14 +12,12 @@ import (
 	"time"
 )
 
-// fakeCore stands in for sing-box: it records that it was started, with which
-// config, and then sits still until killed.
+// fakeCore stands in for sing-box, recording its config and then sitting still.
 func fakeCore(t *testing.T, dir string) (bin, marker string) {
 	t.Helper()
 	bin = filepath.Join(dir, "fake-core")
 	marker = filepath.Join(dir, "started")
-	// The trap is the point of TestSupervisorTerminatesCoreGently: a core that is
-	// killed outright never gets to run it.
+	// A core that is killed outright never gets to run this trap.
 	script := "#!/bin/sh\n" +
 		"trap 'printf terminated > " + marker + "; exit 0' TERM\n" +
 		"printf '%s' \"$3\" > " + marker + "\n" +
@@ -90,8 +88,7 @@ func TestSupervisorRunsWhileRequested(t *testing.T) {
 		t.Fatalf("status names run %q, want %q", st.Nonce, nonce)
 	}
 
-	// The config root runs is the one this process generated, and it carries the
-	// requested pin.
+	// The config root runs is this process's own, carrying the requested pin.
 	data, err := os.ReadFile(files.config)
 	if err != nil {
 		t.Fatalf("supervisor did not generate a config: %v", err)
@@ -102,6 +99,24 @@ func TestSupervisorRunsWhileRequested(t *testing.T) {
 	}
 	if !containsIP(t, data, "198.51.100.7") {
 		t.Error("the generated config does not pin the requested server IP")
+	}
+
+	// The config is root's alone; the app tails the log and polls the status.
+	for _, tc := range []struct {
+		path string
+		want os.FileMode
+	}{
+		{files.config, 0600},
+		{files.log, 0644},
+		{files.status, 0644},
+	} {
+		info, err := os.Stat(tc.path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := info.Mode().Perm(); got != tc.want {
+			t.Errorf("%s written %o, want %o", filepath.Base(tc.path), got, tc.want)
+		}
 	}
 
 	if err := os.Remove(request); err != nil {
@@ -203,9 +218,7 @@ func TestSupervisorReportsAFailedStart(t *testing.T) {
 	}
 }
 
-// sing-box only unwinds the routes auto_route installed if it is asked to stop
-// rather than killed - getting this wrong strands the machine's default route in a
-// dead tun device and breaks networking well beyond this app.
+// Asked to stop, sing-box unwinds its routes; killed, it strands the default route.
 func TestSupervisorTerminatesCoreGently(t *testing.T) {
 	dir := t.TempDir()
 	bin, marker := fakeCore(t, dir)
@@ -233,8 +246,7 @@ func TestSupervisorTerminatesCoreGently(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitForState(t, files.status, tunnelRunning)
-	// The marker appearing means the shell got far enough to install its trap;
-	// without waiting, the stop below can outrun the process's own startup.
+	// The marker means the shell installed its trap, so the stop cannot outrun it.
 	waitForFile(t, marker)
 
 	if err := os.Remove(request); err != nil {

@@ -7,8 +7,7 @@ import (
 	"testing"
 )
 
-// The request is the only thing an unprivileged process can put in front of the
-// root supervisor, so anything it cannot vouch for must read as "no request".
+// Anything the root supervisor cannot vouch for must read as "no request".
 func TestReadRequestRejectsUntrustedInput(t *testing.T) {
 	const goodNonce = "0123456789abcdef"
 	tests := []struct {
@@ -124,5 +123,23 @@ func TestStatusErrWithoutMessage(t *testing.T) {
 	st := tunnelStatus{State: tunnelFailed}
 	if err := st.err(); err == nil {
 		t.Fatal("a failed status produced no error")
+	}
+}
+
+// Rewriting a world-readable request has to narrow it, which os.WriteFile will not.
+func TestWriteRequestTightensAnExistingFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tunnel.run")
+	if err := os.WriteFile(path, []byte("run\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeRequest(path, tunnelRequest{Nonce: "0123456789abcdef"}); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm != 0600 {
+		t.Fatalf("request left at mode %o, want 600", perm)
 	}
 }

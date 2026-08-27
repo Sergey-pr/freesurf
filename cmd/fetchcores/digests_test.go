@@ -14,8 +14,7 @@ import (
 	"testing"
 )
 
-// supportedTargets reads the platforms from the cores directories, so adding a
-// platform makes these tests demand digests for it.
+// supportedTargets reads the cores directories, so a new platform demands digests.
 func supportedTargets(t *testing.T) [][2]string {
 	t.Helper()
 	root, err := repoRoot()

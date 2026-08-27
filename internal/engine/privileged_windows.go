@@ -27,15 +27,9 @@ import (
 // the app starts/stops the tunnel by creating/removing a file - no further prompts,
 // even across app restarts and reboots.
 //
-// The same freesurf.exe binary is reused as the service, but a root-owned copy of
-// it: the elevated installer copies this exe and the core into %ProgramData%\FreeSurf
-// and locks that directory down to SYSTEM and Administrators, so LocalSystem never
-// executes anything an unprivileged process could rewrite. The SCM launches the copy
-// with flagRunService and MaybeRunService() routes it into svc.Run before the Wails
-// GUI ever starts.
-//
-// Everything else the service needs lives in the same directory, so only the user's
-// request file - which the supervisor validates - is passed on the command line.
+// The SCM runs a root-owned copy of freesurf.exe from %ProgramData%\FreeSurf, a
+// directory locked to SYSTEM and Administrators, so LocalSystem executes nothing an
+// unprivileged process could rewrite. Only the request path is passed to it.
 const (
 	serviceName        = "FreeSurfTunnel"
 	serviceDisplayName = "FreeSurf Tunnel Helper"
@@ -49,8 +43,7 @@ const (
 	flagInstallService   = "--freesurf-install-service"
 	flagUninstallService = "--freesurf-uninstall-service"
 
-	// flagSingboxSource names the core the elevated installer copies into the
-	// root-owned directory; it is only ever read by that installer.
+	// flagSingboxSource is the core the elevated installer copies, and nothing else.
 	flagSingboxSource = "--singbox-source"
 )
 
@@ -65,8 +58,7 @@ func windowsRootFiles() rootFiles {
 	}
 }
 
-// coreLogPath and statusPath are what the app reads: the log to display, the status
-// to learn whether the tunnel came up.
+// coreLogPath and statusPath are the root-owned files the app reads.
 func coreLogPath() (string, error) { return windowsRootFiles().log, nil }
 func statusPath() string           { return windowsRootFiles().status }
 
@@ -299,9 +291,7 @@ func (t *tunnelService) Execute(_ []string, r <-chan svc.ChangeRequest, status c
 	return false, 0
 }
 
-// supervise runs the shared supervisor loop: keep sing-box running while the
-// request exists, stop it when it goes away. The loop, the config generation and
-// the status reporting are the same code macOS runs under launchd.
+// supervise runs the shared supervisor loop, the same one launchd runs on macOS.
 func (t *tunnelService) supervise(stop <-chan struct{}) {
 	files := windowsRootFiles()
 	lg, closeLog := supervisorLogger(filepath.Join(programDataDir(), "tun-service.log"))
@@ -309,9 +299,7 @@ func (t *tunnelService) supervise(stop <-chan struct{}) {
 	superviseTunnel(files, t.request, stop, lg)
 }
 
-// installRootFiles copies this exe and the core into the root-owned directory and
-// locks it down, so LocalSystem only ever executes files an unprivileged process
-// cannot replace. Runs elevated.
+// installRootFiles copies this exe and the core into the locked-down root directory.
 func installRootFiles(singboxSource string) (rootFiles, error) {
 	files := windowsRootFiles()
 	dir := programDataDir()
@@ -353,10 +341,7 @@ func copyFile(src, dst string) error {
 	return err
 }
 
-// restrictToAdmins replaces the directory's inherited ACL with one granting full
-// access to SYSTEM and Administrators and read/execute to everyone else. Without
-// this, %ProgramData% subdirectories let ordinary users create files, which is the
-// whole hole we are closing.
+// restrictToAdmins gives SYSTEM and Administrators full access, everyone else read.
 func restrictToAdmins(dir string) error {
 	system, err := windows.CreateWellKnownSid(windows.WinLocalSystemSid)
 	if err != nil {
@@ -380,8 +365,7 @@ func restrictToAdmins(dir string) error {
 	if err != nil {
 		return err
 	}
-	// PROTECTED_DACL_SECURITY_INFORMATION drops the inherited entries that would
-	// otherwise let Users write here.
+	// PROTECTED drops the inherited entries that let Users write here.
 	return windows.SetNamedSecurityInfo(
 		dir,
 		windows.SE_FILE_OBJECT,
@@ -499,10 +483,7 @@ func programDataDir() string {
 
 func markerPath() string { return filepath.Join(programDataDir(), "helper.version") }
 
-// currentMarker combines the helper version with the exe path and the request file
-// baked into the service command line, so the service is reinstalled on a version
-// bump, when the app moves, and for a different user whose request file the
-// installed service would otherwise never watch.
+// currentMarker forces a reinstall on a version bump, a moved app or another user.
 func currentMarker() (string, error) {
 	exe, err := os.Executable()
 	if err != nil {

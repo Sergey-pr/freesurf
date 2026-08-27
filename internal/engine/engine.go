@@ -39,7 +39,7 @@ const logBufferMax = 800
 // Engine runs the Xray backend and drives the privileged sing-box TUN.
 type Engine struct {
 	deps deps
-	// Poll intervals for the two background watchers, tightened in tests.
+	// Poll intervals for the two background watchers.
 	monitorTick time.Duration
 	tailTick    time.Duration
 
@@ -200,8 +200,7 @@ func (e *Engine) Connect(node *store.Node) (ConnState, error) {
 	if err != nil {
 		return e.fail(node.ID, err)
 	}
-	// A pre-flight on the document the supervisor will generate: it builds its own
-	// copy from the same inputs, so a failure here is a failure there.
+	// A pre-flight: the supervisor builds its own copy from the same inputs.
 	if err := e.deps.checkConfig(bin, cfg); err != nil {
 		return e.fail(node.ID, err)
 	}
@@ -267,7 +266,7 @@ func (e *Engine) fail(nodeID int64, err error) (ConnState, error) {
 	return state, err
 }
 
-// xrayStopGrace is short: Xray holds no system state, so there is little to unwind.
+// xrayStopGrace is short because Xray holds no system state.
 const xrayStopGrace = 2 * time.Second
 
 func stopProcess(p process) {
@@ -276,8 +275,7 @@ func stopProcess(p process) {
 	}
 }
 
-// setRunning installs a new tunnel generation and returns its stop channel. Any
-// previous generation is shut down first so its monitor and log tail exit.
+// setRunning installs a tunnel generation, shutting down any previous one first.
 func (e *Engine) setRunning(p process) chan struct{} {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -289,16 +287,14 @@ func (e *Engine) setRunning(p process) chan struct{} {
 	return e.stop
 }
 
-// takeRunning clears the running generation and returns the backend process that
-// was running, if any.
+// takeRunning clears the running generation and returns its backend process.
 func (e *Engine) takeRunning() process {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.clearRunningLocked()
 }
 
-// clearRunningLocked drops the backend process and closes the stop channel, which
-// is what shuts the monitor and log tail down. Caller holds e.mu.
+// clearRunningLocked stops the monitor and log tail by closing stop. Holds e.mu.
 func (e *Engine) clearRunningLocked() process {
 	p := e.xray
 	e.xray = nil
@@ -347,8 +343,7 @@ func (e *Engine) monitor(stop chan struct{}) {
 		case <-stop:
 			return
 		case <-ticker.C:
-			// Clearing under the same lock that observed the death keeps a
-			// concurrent Connect from having its fresh tunnel torn down here.
+			// One lock, so a concurrent Connect keeps its fresh tunnel.
 			e.mu.Lock()
 			xray := e.xray
 			dead := xray == nil || xray.Exited()

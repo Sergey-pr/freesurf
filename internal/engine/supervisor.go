@@ -5,12 +5,11 @@ import (
 	"os"
 	"time"
 
+	"freesurf/internal/paths"
 	"freesurf/internal/proxy"
 )
 
-// rootFiles are the root-owned paths the supervisor works with. Everything root
-// reads or executes lives here, out of reach of the unprivileged side; the request
-// file in the user's data directory is the sole exception, and it is validated.
+// rootFiles are the root-owned paths the supervisor reads, writes and executes.
 type rootFiles struct {
 	exe     string // root-owned copy of this binary, run by launchd / the SCM
 	singbox string
@@ -19,17 +18,13 @@ type rootFiles struct {
 	status  string
 }
 
-// supervisorTick is how often the request file is checked; a variable so tests
-// don't have to wait out real seconds.
+// supervisorTick is how often the request file is checked.
 var supervisorTick = time.Second
 
-// coreStopGrace is how long sing-box gets to unwind its routing before it is
-// killed. Cutting this short strands the machine's default route in a dead tun.
+// coreStopGrace is how long sing-box gets to unwind its routing before it is killed.
 const coreStopGrace = 5 * time.Second
 
-// flagRunService puts this binary into privileged supervisor mode; flagRequest
-// names the user's request file, the one path the supervisor cannot derive itself.
-// launchd (macOS) and the SCM (Windows) both launch the root-owned copy this way.
+// Supervisor mode, and the one path the supervisor cannot derive for itself.
 const (
 	flagRunService = "--freesurf-tun-service"
 	flagRequest    = "--request"
@@ -45,10 +40,7 @@ func parseRequestPath(args []string) string {
 	return ""
 }
 
-// superviseTunnel keeps sing-box running while the request file exists and stops it
-// when the file goes away, reporting what happened through the status file. It
-// regenerates the config from the request on every start, so the document root
-// hands to sing-box is one this process built, never one it was given.
+// superviseTunnel runs sing-box while the request file exists, reporting through the status.
 func superviseTunnel(files rootFiles, requestPath string, stop <-chan struct{}, lg *log.Logger) {
 	var (
 		core    *proxy.Process
@@ -89,7 +81,7 @@ func superviseTunnel(files rootFiles, requestPath string, stop <-chan struct{}, 
 				_ = writeStatus(files.status, tunnelStatus{Nonce: nonce, State: tunnelStopped})
 			}
 		case core != nil && req.Nonce != running.Nonce:
-			// A new run was requested without a stop in between; restart on it.
+			// A new run without a stop in between.
 			lg.Printf("new request %s, restarting sing-box", req.Nonce)
 			stopCore()
 			startCore(files, req, lg, &core, &running)
@@ -103,14 +95,17 @@ func superviseTunnel(files rootFiles, requestPath string, stop <-chan struct{}, 
 	}
 }
 
-// startCore generates the config for req and launches sing-box on it, recording the
-// outcome in the status file.
+// startCore generates req's config and launches sing-box on it.
 func startCore(files rootFiles, req tunnelRequest, lg *log.Logger, core **proxy.Process, running *tunnelRequest) {
 	_ = writeStatus(files.status, tunnelStatus{Nonce: req.Nonce, State: tunnelStarting})
 
 	cfg, err := proxy.SingboxConfig(req.ServerIP)
 	if err == nil {
-		err = os.WriteFile(files.config, cfg, 0644)
+		// Only root reads this config; the chmod also narrows one already on disk.
+		err = os.WriteFile(files.config, cfg, 0600)
+		if err == nil {
+			err = paths.RestrictFile(files.config)
+		}
 	}
 	var p *proxy.Process
 	if err == nil {
@@ -128,9 +123,9 @@ func startCore(files rootFiles, req tunnelRequest, lg *log.Logger, core **proxy.
 	_ = writeStatus(files.status, tunnelStatus{Nonce: req.Nonce, State: tunnelRunning})
 }
 
-// supervisorLogger writes the supervisor's own diagnostics next to the core log.
+// supervisorLogger writes the supervisor's own diagnostics.
 func supervisorLogger(path string) (*log.Logger, func()) {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 	if err != nil {
 		return log.New(os.Stderr, "", log.LstdFlags), func() {}
 	}

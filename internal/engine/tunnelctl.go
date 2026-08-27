@@ -9,18 +9,11 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+
+	"freesurf/internal/paths"
 )
 
-// The app and the privileged supervisor talk through exactly two files. The app
-// writes a request into its own data directory; the supervisor writes a status
-// into the root-owned directory. Nothing else crosses the boundary - in
-// particular the supervisor generates the core's config itself, so the request
-// below is the whole of what an unprivileged process can influence.
-//
-// A local attacker who rewrites the request can pick the pinned server IP, which
-// costs one direct-route rule (traffic to that address leaves the tunnel). That
-// is the price of letting the unprivileged side say which server it dialled; it
-// is bounded, unlike handing root a config document.
+// The app requests, the supervisor answers with a status; nothing else crosses over.
 
 // Connection states reported by the supervisor.
 const (
@@ -30,11 +23,10 @@ const (
 	tunnelFailed   = "failed"
 )
 
-// nonceRe is deliberately strict: the nonce is echoed back into a root-owned file.
+// Strict: the nonce is echoed back into a root-owned file.
 var nonceRe = regexp.MustCompile(`^[0-9a-f]{16}$`)
 
-// tunnelRequest is the run flag the supervisor watches. Its presence means "run";
-// nonce names this particular run so the app can tell whose status it is reading.
+// tunnelRequest is the run flag the supervisor watches, named by a nonce.
 type tunnelRequest struct {
 	Nonce    string `json:"nonce"`
 	ServerIP string `json:"serverIP,omitempty"`
@@ -60,12 +52,13 @@ func writeRequest(path string, req tunnelRequest) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, append(data, '\n'), 0600)
+	if err := os.WriteFile(path, append(data, '\n'), 0600); err != nil {
+		return err
+	}
+	return paths.RestrictFile(path)
 }
 
-// readRequest parses and validates the request. Anything malformed is treated as
-// absent: the supervisor runs as root and must not act on input it cannot vouch
-// for.
+// readRequest validates the request; root must not act on anything malformed.
 func readRequest(path string) (tunnelRequest, bool) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -84,8 +77,7 @@ func readRequest(path string) (tunnelRequest, bool) {
 	return req, true
 }
 
-// writeStatus replaces the status file atomically, so the app never reads a
-// half-written report.
+// writeStatus replaces the status atomically, so the app never reads half a report.
 func writeStatus(path string, st tunnelStatus) error {
 	data, err := json.Marshal(st)
 	if err != nil {

@@ -11,16 +11,13 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
-// process is the running unprivileged backend. An interface, not *proxy.Process,
-// so tests can drive connect/disconnect without spawning a real Xray.
+// process is the running unprivileged backend, an interface so tests can fake it.
 type process interface {
 	Stop(grace time.Duration)
 	Exited() bool
 }
 
-// deps is everything the lifecycle reaches for outside the engine: core install,
-// config generation, the privileged helper, the backend process and UI events.
-// New wires the real implementations; tests replace individual fields.
+// deps is everything the lifecycle reaches for outside the engine; tests swap fields.
 type deps struct {
 	ensureCore      func(context.Context) (string, error)
 	ensureXray      func(context.Context) (string, error)
@@ -50,8 +47,7 @@ func defaultDeps() deps {
 		coreLog:         coreLogPath,
 		xrayLog:         paths.XrayLog,
 		runXray: func(binPath, cfgPath, logPath string) (process, error) {
-			// Returned explicitly: handing back a typed nil *proxy.Process would
-			// give the caller a non-nil interface on error.
+			// Explicit: a typed nil would reach the caller as a non-nil interface.
 			p, err := proxy.RunXray(binPath, cfgPath, logPath)
 			if err != nil {
 				return nil, err

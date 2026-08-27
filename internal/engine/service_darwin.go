@@ -8,10 +8,7 @@ import (
 	"syscall"
 )
 
-// MaybeRunService handles the privileged supervisor mode: launchd starts the
-// root-owned copy of this binary with flagRunService, and it must never reach the
-// Wails GUI. It returns true if the process was started that way and the caller
-// (main) should exit afterwards.
+// MaybeRunService runs the launchd supervisor, returning true so main skips the GUI.
 func MaybeRunService() bool {
 	if len(os.Args) < 2 || os.Args[1] != flagRunService {
 		return false
@@ -21,8 +18,7 @@ func MaybeRunService() bool {
 	lg, closeLog := supervisorLogger(rootSupervisorLg)
 	defer closeLog()
 
-	// launchd stops the daemon with SIGTERM; bring the tunnel down with us rather
-	// than leaving a root core behind holding the routing table.
+	// Take the tunnel down with us instead of orphaning a core that owns the routes.
 	stop := make(chan struct{})
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT)

@@ -26,9 +26,7 @@ import (
 // (launchd's own KeepAlive/PathState only governs restart, not stopping a running
 // job, which is why we supervise sing-box ourselves.)
 //
-// Everything root executes or reads lives in rootHelperDir, owned by root:wheel:
-// the core, this binary's copy, and the config the supervisor generates. The app's
-// own copies are never read by root, so tampering with them cannot escalate.
+// Everything root executes or reads lives in rootHelperDir, owned by root:wheel.
 const (
 	helperLabel      = "com.freesurf.helper"
 	helperPlistPath  = "/Library/LaunchDaemons/com.freesurf.helper.plist"
@@ -55,8 +53,7 @@ func darwinRootFiles() rootFiles {
 	}
 }
 
-// coreLogPath and statusPath are what the app reads: the log to display, the status
-// to learn whether the tunnel came up. Both are root-owned and world-readable.
+// coreLogPath and statusPath are the root-owned files the app reads.
 func coreLogPath() (string, error) { return rootCoreLogPath, nil }
 func statusPath() string           { return rootStatusPath }
 
@@ -65,17 +62,12 @@ func HelperInstalled() bool {
 	return err == nil
 }
 
-// rootSingboxOK reports whether the root-owned core copy is byte-identical to the
-// core embedded in this build. Compared by digest rather than by running it: this
-// is the binary launchd executes as root, so deciding to trust it must not require
-// executing it first.
+// rootSingboxOK digests the core launchd runs as root, rather than executing it.
 func rootSingboxOK() bool {
 	return proxy.IsEmbeddedCore(paths.SingboxName, rootSingboxPath)
 }
 
-// rootExeOK reports whether the installed supervisor is this build of the app. It
-// goes stale on every app update, which is exactly when the daemon must be
-// refreshed rather than left running last version's code as root.
+// rootExeOK reports whether the installed supervisor is this build of the app.
 func rootExeOK() bool {
 	exe, err := os.Executable()
 	if err != nil {
@@ -84,9 +76,7 @@ func rootExeOK() bool {
 	return sameFile(exe, rootExePath)
 }
 
-// helperMarker combines the helper version with the request path baked into the
-// daemon's plist, so a version bump and a different user's request file both force
-// a reinstall rather than leaving a daemon watching a file nobody writes.
+// helperMarker forces a reinstall on a version bump or a different request path.
 func helperMarker(request string) string { return helperVersion + "\n" + request }
 
 func installedHelperMarker() string {
@@ -119,17 +109,11 @@ func EnsureHelper(singboxBin string) error {
 	}
 
 	stagedPlist := filepath.Join(dir, helperLabel+".plist")
-	if err := os.WriteFile(stagedPlist, []byte(buildHelperPlist(request)), 0644); err != nil {
+	if err := os.WriteFile(stagedPlist, []byte(buildHelperPlist(request)), 0600); err != nil {
 		return err
 	}
 
-	// chmod 700 on the directory keeps the generated config and the status file out
-	// of reach of everyone but root, and 755 on the two executables lets launchd run
-	// them while leaving them unwritable.
-	// Order matters: stop the old daemon and any core it left behind before
-	// replacing the files, so nothing is copied over a running binary, and so the
-	// replacement never starts a second tun alongside an orphan still holding the
-	// routes auto_route installed.
+	// Stop the daemon and any core it left behind before replacing the files.
 	script := strings.Join([]string{
 		"mkdir -p " + shq(rootHelperDir),
 		"(launchctl bootout system " + shq(helperPlistPath) + " 2>/dev/null || true)",
@@ -165,7 +149,9 @@ func fileSum(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
+	defer func() {
+		_ = f.Close()
+	}()
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil {
 		return "", err

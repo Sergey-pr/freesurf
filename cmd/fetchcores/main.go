@@ -132,8 +132,7 @@ func fetchXray(ctx context.Context, targetOS, targetArch, dest string) error {
 	return downloadAndExtract(ctx, url, asset, want, dest, extractZipEntry)
 }
 
-// singboxAssetName is the release asset for a target, and the key its pinned
-// digest is stored under.
+// singboxAssetName is the release asset for a target, and its digest's key.
 func singboxAssetName(targetOS, targetArch string) string {
 	suffix := singboxAssetSuffix(targetOS, targetArch)
 	if suffix == "" {
@@ -173,9 +172,7 @@ func xrayAssetName(targetOS, targetArch string) string {
 	return ""
 }
 
-// downloadAndExtract fetches the archive at url to a temp file, checks it against
-// the digest pinned for assetName, and writes the entry named wantBase to dest via
-// the given extractor.
+// downloadAndExtract fetches url, checks assetName's digest, then extracts wantBase.
 func downloadAndExtract(ctx context.Context, url, assetName, wantBase, dest string, extract func(archivePath, wantBase, dest string) error) error {
 	tmp, err := os.CreateTemp("", "fetchcores-*")
 	if err != nil {
@@ -197,9 +194,7 @@ func downloadAndExtract(ctx context.Context, url, assetName, wantBase, dest stri
 	return extract(tmpPath, wantBase, dest)
 }
 
-// verifyDigest compares a download against its pinned SHA-256. An asset with no
-// pin is refused too, so bumping a core version without updating assetDigests
-// can't quietly skip the check.
+// verifyDigest checks a download against its pin, refusing an asset that has none.
 func verifyDigest(assetName, sum string) error {
 	want, ok := assetDigests[assetName]
 	if !ok {
@@ -237,8 +232,7 @@ func httpDownload(ctx context.Context, url, dest string) (string, error) {
 	defer func() {
 		_ = f.Close()
 	}()
-	// Hashing the bytes on their way to disk also catches a body truncated by the
-	// size limit, which would otherwise extract as a corrupt archive.
+	// Hashing on the way to disk also catches a body truncated by the size limit.
 	const maxSize = 100 * 1024 * 1024
 	sum := sha256.New()
 	if _, err := io.Copy(io.MultiWriter(f, sum), io.LimitReader(resp.Body, maxSize)); err != nil {

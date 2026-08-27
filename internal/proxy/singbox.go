@@ -43,9 +43,7 @@ func EnsureCore(ctx context.Context) (string, error) {
 	return path, nil
 }
 
-// CheckConfig validates a sing-box config document with `sing-box check`. It takes
-// the document, not a path, so the caller has nothing to leave lying around: this
-// is a pre-flight on what the supervisor will generate, not the config root runs.
+// CheckConfig validates a config document with `sing-box check`, leaving no file behind.
 func CheckConfig(binPath string, cfg []byte) error {
 	f, err := os.CreateTemp("", "freesurf-check-*.json")
 	if err != nil {
