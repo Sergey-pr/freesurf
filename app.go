@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -354,7 +355,8 @@ func (a *App) Connect(nodeID int64) engine.ConnState {
 		return a.engine.State()
 	}
 	state, err := a.engine.Connect(node)
-	if err != nil {
+	// A double-click or a Stop mid-connect is not worth a dialog.
+	if err != nil && !errors.Is(err, engine.ErrBusy) && !errors.Is(err, engine.ErrCancelled) {
 		a.showError(err)
 	}
 	return state

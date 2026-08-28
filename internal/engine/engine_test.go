@@ -471,3 +471,125 @@ func TestCleanCoreLine(t *testing.T) {
 		}
 	}
 }
+
+// A second attempt while one is in flight is refused rather than run alongside it.
+func TestConnectRefusesASecondAttempt(t *testing.T) {
+	h := newHarness(t)
+	release := make(chan struct{})
+	entered := make(chan struct{})
+	h.e.deps.ensureCore = func(context.Context) (string, error) {
+		close(entered)
+		<-release
+		return "sing-box", nil
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := h.e.Connect(testNode())
+		done <- err
+	}()
+	<-entered
+
+	if _, err := h.e.Connect(testNode()); !errors.Is(err, ErrBusy) {
+		t.Fatalf("second Connect error = %v, want ErrBusy", err)
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatalf("first Connect: %v", err)
+	}
+	if up, _ := h.counts(); up != 1 {
+		t.Fatalf("tunnel started %d times, want 1", up)
+	}
+	h.e.Disconnect()
+}
+
+// Disconnect during a connect has to win: no tunnel may come up behind it.
+func TestDisconnectCancelsAConnectInFlight(t *testing.T) {
+	h := newHarness(t)
+	release := make(chan struct{})
+	entered := make(chan struct{})
+	h.e.deps.ensureHelper = func(string) error {
+		close(entered)
+		<-release
+		return nil
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := h.e.Connect(testNode())
+		done <- err
+	}()
+	<-entered
+
+	h.e.Disconnect()
+	close(release)
+
+	if err := <-done; !errors.Is(err, ErrCancelled) {
+		t.Fatalf("Connect error = %v, want ErrCancelled", err)
+	}
+	if st := h.e.State(); st.Status != StatusDisconnected {
+		t.Fatalf("engine state = %+v, want disconnected", st)
+	}
+	if h.stopChan() != nil {
+		t.Fatal("a cancelled connect left a live tunnel generation")
+	}
+	if up, down := h.counts(); up != 0 || down == 0 {
+		t.Fatalf("tunnel start/stop = %d/%d, want no start and at least one stop", up, down)
+	}
+}
+
+// Cancelling after the backend is up must still stop it.
+func TestCancelAfterBackendStartedStopsIt(t *testing.T) {
+	h := newHarness(t)
+	release := make(chan struct{})
+	entered := make(chan struct{})
+	h.e.deps.waitTunnelUp = func(string, time.Duration) error {
+		close(entered)
+		<-release
+		return nil
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := h.e.Connect(testNode())
+		done <- err
+	}()
+	<-entered
+
+	h.e.Disconnect()
+	close(release)
+
+	if err := <-done; !errors.Is(err, ErrCancelled) {
+		t.Fatalf("Connect error = %v, want ErrCancelled", err)
+	}
+	if kills := h.lastProc().kills(); kills == 0 {
+		t.Fatal("the backend was left running after the attempt was cancelled")
+	}
+	if h.stopChan() != nil {
+		t.Fatal("a cancelled connect published a tunnel generation")
+	}
+}
+
+// Switching nodes without an explicit Disconnect must not orphan the old backend.
+func TestConnectSwitchingNodesStopsTheOldBackend(t *testing.T) {
+	h := newHarness(t)
+	if _, err := h.e.Connect(testNode()); err != nil {
+		t.Fatalf("first Connect: %v", err)
+	}
+	first := h.lastProc()
+
+	other := &store.Node{ID: 9, Name: "node-9", URI: "vless://uuid@example.org:443"}
+	if _, err := h.e.Connect(other); err != nil {
+		t.Fatalf("second Connect: %v", err)
+	}
+	if first.kills() == 0 {
+		t.Fatal("the previous backend was left running")
+	}
+	if second := h.lastProc(); second == first {
+		t.Fatal("the second connect reused the old backend")
+	}
+	if st := h.e.State(); st.NodeID != 9 {
+		t.Fatalf("state names node %d, want 9", st.NodeID)
+	}
+	h.e.Disconnect()
+}

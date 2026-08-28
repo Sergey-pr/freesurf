@@ -1,12 +1,10 @@
-// Package engine owns the VPN lifecycle: it generates configs, runs the
-// unprivileged Xray backend, and drives the privileged sing-box TUN via the
-// platform helper.
 package engine
 
 import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -36,6 +34,16 @@ type ConnState struct {
 
 const logBufferMax = 800
 
+// connectTimeout bounds one attempt, helper install and password prompt included.
+const connectTimeout = 6 * time.Minute
+
+var (
+	// ErrBusy rejects a second attempt while one is already running.
+	ErrBusy = errors.New("a connection attempt is already in progress")
+	// ErrCancelled reports an attempt stopped by Disconnect.
+	ErrCancelled = errors.New("connection attempt cancelled")
+)
+
 // Engine runs the Xray backend and drives the privileged sing-box TUN.
 type Engine struct {
 	deps deps
@@ -43,10 +51,12 @@ type Engine struct {
 	monitorTick time.Duration
 	tailTick    time.Duration
 
-	mu   sync.Mutex
-	conn ConnState
-	xray process       // local Xray process (unprivileged)
-	stop chan struct{} // closed to stop the monitor and log tail
+	mu         sync.Mutex
+	conn       ConnState
+	xray       process       // local Xray process (unprivileged)
+	stop       chan struct{} // closed to stop the monitor and log tail
+	connecting bool
+	abort      context.CancelFunc // cancels the attempt in flight
 
 	logMu  sync.Mutex
 	logBuf []string
@@ -174,11 +184,17 @@ func (e *Engine) ReinstallCores() error {
 // "vpn:state" event. The returned error (if any) is for the caller to surface;
 // the state is already emitted.
 func (e *Engine) Connect(node *store.Node) (ConnState, error) {
+	ctx, err := e.beginConnect()
+	if err != nil {
+		return e.State(), err
+	}
+	defer e.endConnect()
+
+	// Switching nodes: take the old tunnel down rather than orphan its backend.
+	e.dropRunning()
+
 	e.logf("Connecting to %q…", node.Name)
 	e.setState(ConnState{Status: StatusConnecting, NodeID: node.ID, Message: "Preparing core…"})
-
-	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
-	defer cancel()
 
 	e.logf("Ensuring cores (sing-box %s, xray %s)…", proxy.RequiredCoreVersion, proxy.RequiredXrayVersion)
 	bin, err := e.deps.ensureCore(ctx)
@@ -215,6 +231,9 @@ func (e *Engine) Connect(node *store.Node) (ConnState, error) {
 	if err := e.deps.ensureHelper(bin); err != nil {
 		return e.fail(node.ID, err)
 	}
+	if ctx.Err() != nil {
+		return e.abandon(nil)
+	}
 
 	// Start Xray (unprivileged) first so its SOCKS port is ready for sing-box.
 	xrayLog, err := e.deps.xrayLog()
@@ -232,6 +251,9 @@ func (e *Engine) Connect(node *store.Node) (ConnState, error) {
 		stopProcess(xray)
 		return e.fail(node.ID, err)
 	}
+	if ctx.Err() != nil {
+		return e.abandon(xray)
+	}
 
 	e.setState(ConnState{Status: StatusConnecting, NodeID: node.ID, Message: "Starting tunnel…"})
 	e.logf("Starting tunnel…")
@@ -246,15 +268,26 @@ func (e *Engine) Connect(node *store.Node) (ConnState, error) {
 		return e.fail(node.ID, err)
 	}
 
-	stop := e.setRunning(xray)
+	state := ConnState{Status: StatusConnected, NodeID: node.ID}
+	stop, ok := e.installRunning(ctx, xray, state)
+	if !ok {
+		return e.abandon(xray)
+	}
 
 	go e.monitor(stop)
 	go e.tailCore(logPath, stop)
 
 	e.logf("Tunnel up.")
-	state := ConnState{Status: StatusConnected, NodeID: node.ID}
-	e.setState(state)
+	e.deps.emit("vpn:state", state)
 	return state, nil
+}
+
+// abandon unwinds a half-built tunnel after Disconnect cancelled the attempt.
+func (e *Engine) abandon(xray process) (ConnState, error) {
+	e.logf("Connect cancelled.")
+	e.deps.stopTunnel()
+	stopProcess(xray)
+	return e.State(), ErrCancelled
 }
 
 func (e *Engine) fail(nodeID int64, err error) (ConnState, error) {
@@ -275,16 +308,54 @@ func stopProcess(p process) {
 	}
 }
 
-// setRunning installs a tunnel generation, shutting down any previous one first.
-func (e *Engine) setRunning(p process) chan struct{} {
+// beginConnect claims the lifecycle for one attempt, refusing a second.
+func (e *Engine) beginConnect() (context.Context, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if e.connecting {
+		return nil, ErrBusy
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), connectTimeout)
+	e.connecting = true
+	e.abort = cancel
+	return ctx, nil
+}
+
+func (e *Engine) endConnect() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.connecting = false
+	if e.abort != nil {
+		e.abort()
+		e.abort = nil
+	}
+}
+
+// installRunning publishes state and generation together, or false if cancelled.
+func (e *Engine) installRunning(ctx context.Context, p process, state ConnState) (chan struct{}, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if ctx.Err() != nil {
+		return nil, false
+	}
 	if e.stop != nil {
 		close(e.stop)
 	}
 	e.xray = p
 	e.stop = make(chan struct{})
-	return e.stop
+	e.conn = state
+	return e.stop, true
+}
+
+// dropRunning stops a running tunnel, if there is one, and says whether there was.
+func (e *Engine) dropRunning() bool {
+	xray := e.takeRunning()
+	if xray == nil {
+		return false
+	}
+	e.deps.stopTunnel()
+	stopProcess(xray)
+	return true
 }
 
 // takeRunning clears the running generation and returns its backend process.
@@ -313,12 +384,17 @@ func (e *Engine) Disconnect() ConnState { return e.teardown(true) }
 func (e *Engine) Shutdown() { e.teardown(false) }
 
 func (e *Engine) teardown(emit bool) ConnState {
-	xray := e.takeRunning()
-	had := xray != nil
+	e.mu.Lock()
+	if e.abort != nil {
+		e.abort()
+	}
+	e.mu.Unlock()
 
-	e.deps.stopTunnel() // helper stops the root core within ~1s; no prompt needed
+	// Unconditional: withdraw the request even if no generation was ever published.
+	xray := e.takeRunning()
+	e.deps.stopTunnel() // the helper stops the root core within ~1s, no prompt
 	stopProcess(xray)
-	if had && emit {
+	if xray != nil && emit {
 		e.logf("Stopping tunnel…")
 	}
 
