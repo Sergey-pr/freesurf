@@ -15,7 +15,7 @@ import (
 )
 
 // Happ "crypt5" deep links (happ://crypt5/…) hide a subscription behind a
-// ChaCha20-Poly1305 + RSA envelope. The 34 marker→RSA-key pairs below are the
+// ChaCha20-Poly1305 + RSA envelope. The 36 marker→RSA-key pairs below are the
 // ones bundled in the Happ app (same set the public decryptors use); decoding is
 // otherwise a pure, offline transform. Ported from the reference JS/Rust
 // implementations (LeeeeT/happ-decryptor, amurcanov/happ-decrypt-universal).
@@ -56,12 +56,44 @@ func decryptCrypt5(payload string) (string, error) {
 
 	marker := string(shuffled[:4]) + string(shuffled[len(shuffled)-4:])
 	body := shuffled[4 : len(shuffled)-4]
+
+	keyB64, ok := happKeys()[marker]
+	if !ok {
+		return "", fmt.Errorf("unknown Happ key marker %q", marker)
+	}
+	priv, err := parsePKCS8RSA(keyB64)
+	if err != nil {
+		return "", err
+	}
+
+	// Newer links salt the ChaCha key; the byte after the nonce tells the layouts apart.
+	salted := len(body) > 12 && (body[12] < '0' || body[12] > '9')
+	plain, err := decryptCrypt5Body(body, priv, salted)
+	if err == nil {
+		return plain, nil
+	}
+	if plain, altErr := decryptCrypt5Body(body, priv, !salted); altErr == nil {
+		return plain, nil
+	}
+	return "", err
+}
+
+func decryptCrypt5Body(body []byte, priv *rsa.PrivateKey, salted bool) (string, error) {
 	if len(body) < 13 {
 		return "", fmt.Errorf("crypt5 body too short")
 	}
 
 	nonce := body[:12]
-	rest := body[12:]
+	var salt []byte
+	lenStart := 12
+	if salted {
+		if len(body) < 22 {
+			return "", fmt.Errorf("crypt5 salted header too short")
+		}
+		salt = body[14:22]
+		lenStart = 22
+	}
+	rest := body[lenStart:]
 
 	digits := 0
 	for digits < len(rest) && rest[digits] >= '0' && rest[digits] <= '9' {
@@ -82,15 +114,6 @@ func decryptCrypt5(payload string) (string, error) {
 	cipherSegment := string(packed[1 : 1+segLen]) // ChaCha20-Poly1305 ciphertext (base64)
 	rsaSegment := string(packed[1+segLen:])       // RSA-wrapped ChaCha key (base64)
 
-	keyB64, ok := happKeys()[marker]
-	if !ok {
-		return "", fmt.Errorf("unknown Happ key marker %q", marker)
-	}
-	priv, err := parsePKCS8RSA(keyB64)
-	if err != nil {
-		return "", err
-	}
-
 	rsaCipher, err := happB64(rsaSegment)
 	if err != nil {
 		return "", fmt.Errorf("crypt5 rsa segment base64: %w", err)
@@ -106,6 +129,11 @@ func decryptCrypt5(payload string) (string, error) {
 	}
 	if len(chachaKey) != chacha20poly1305.KeySize {
 		return "", fmt.Errorf("crypt5 chacha key has invalid length %d", len(chachaKey))
+	}
+	if salt != nil {
+		for i := range chachaKey {
+			chachaKey[i] ^= salt[i%len(salt)]
+		}
 	}
 
 	ciphertext, err := happB64(cipherSegment)
