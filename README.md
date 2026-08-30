@@ -62,7 +62,7 @@ The visual design and project layout follow the `timespan` app; the VPN concepts
 ## Prerequisites
 
 - **Go** 1.25+
-- **Node.js** 18+ and npm
+- **Node.js** 20.19+ (or 22.12+, as Vite 8 requires) and npm
 - **Wails v3 CLI**: `go install github.com/wailsapp/wails/v3/cmd/wails3@latest`
   (ensure `~/go/bin` is on your `PATH`)
 

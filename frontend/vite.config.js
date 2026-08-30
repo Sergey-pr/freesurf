@@ -8,9 +8,9 @@ export default defineConfig({
   build: {
     rollupOptions: {
       input: {
-        main: resolve(__dirname, 'index.html'),
-        error: resolve(__dirname, 'error.html'),
-        logs: resolve(__dirname, 'logs.html'),
+        main: resolve(import.meta.dirname, 'index.html'),
+        error: resolve(import.meta.dirname, 'error.html'),
+        logs: resolve(import.meta.dirname, 'logs.html'),
       },
     },
   },
