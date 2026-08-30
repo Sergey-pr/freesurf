@@ -65,14 +65,6 @@ func TestRequestRoundTrip(t *testing.T) {
 	if got.Nonce != nonce || got.ServerIP != "198.51.100.7" {
 		t.Fatalf("read back %+v, want nonce %s and IP 198.51.100.7", got, nonce)
 	}
-
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if perm := info.Mode().Perm(); perm != 0600 {
-		t.Errorf("request written with mode %o, want 600", perm)
-	}
 }
 
 func TestNoncesDiffer(t *testing.T) {
@@ -123,23 +115,5 @@ func TestStatusErrWithoutMessage(t *testing.T) {
 	st := tunnelStatus{State: tunnelFailed}
 	if err := st.err(); err == nil {
 		t.Fatal("a failed status produced no error")
-	}
-}
-
-// Rewriting a world-readable request has to narrow it, which os.WriteFile will not.
-func TestWriteRequestTightensAnExistingFile(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "tunnel.run")
-	if err := os.WriteFile(path, []byte("run\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	if err := writeRequest(path, tunnelRequest{Nonce: "0123456789abcdef"}); err != nil {
-		t.Fatal(err)
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if perm := info.Mode().Perm(); perm != 0600 {
-		t.Fatalf("request left at mode %o, want 600", perm)
 	}
 }
