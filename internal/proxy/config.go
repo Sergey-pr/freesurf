@@ -19,8 +19,10 @@ import (
 // macOS the system stack works and strict_route must stay off (true loops our own
 // outbound back into the TUN); on Windows the gvisor stack over Wintun with
 // strict_route on is the reliable combination and avoids route/DNS leaks.
-func tunOptions() (stack string, strictRoute bool) {
-	if runtime.GOOS == "windows" {
+func tunOptions() (stack string, strictRoute bool) { return tunOptionsFor(runtime.GOOS) }
+
+func tunOptionsFor(goos string) (stack string, strictRoute bool) {
+	if goos == "windows" {
 		return "gvisor", true
 	}
 	return "system", false
@@ -29,8 +31,10 @@ func tunOptions() (stack string, strictRoute bool) {
 // xrayProcessName is how sing-box's process_name rule sees the Xray process, used
 // to send Xray's own traffic to the server out directly (breaking the routing
 // loop). On Windows the process name includes the .exe suffix.
-func xrayProcessName() string {
-	if runtime.GOOS == "windows" {
+func xrayProcessName() string { return xrayProcessNameFor(runtime.GOOS) }
+
+func xrayProcessNameFor(goos string) string {
+	if goos == "windows" {
 		return paths.XrayName + ".exe"
 	}
 	return paths.XrayName
@@ -110,13 +114,23 @@ func SingboxConfig(serverIP string) ([]byte, error) {
 	return json.MarshalIndent(cfg, "", "  ")
 }
 
-// WriteXrayConfig builds the Xray config (SOCKS in + the node's outbound) and
-// writes it, returning its path and the pinned proxy-server IP (to feed into the
-// sing-box direct rule). The IP may be empty if the host couldn't be resolved.
+// WriteXrayConfig writes the Xray config, returning its path and the pinned
+// proxy-server IP. The IP may be empty if the host couldn't be resolved.
 func WriteXrayConfig(node *store.Node) (string, string, error) {
-	outbound, serverIP, err := buildXrayOutbound(node.URI)
+	cfg, serverIP, err := XrayConfig(node, resolveServerIP)
 	if err != nil {
 		return "", "", err
+	}
+	path, err := writeJSONBytes(cfg, paths.XrayConfig)
+	return path, serverIP, err
+}
+
+// XrayConfig builds the Xray config document (SOCKS in + the node's outbound) and
+// the pinned proxy-server IP that the sing-box direct rule needs.
+func XrayConfig(node *store.Node, resolve func(string) string) ([]byte, string, error) {
+	outbound, serverIP, err := buildXrayOutbound(node.URI, resolve)
+	if err != nil {
+		return nil, "", err
 	}
 	cfg := map[string]any{
 		"log": map[string]any{"loglevel": "warning"},
@@ -128,15 +142,11 @@ func WriteXrayConfig(node *store.Node) (string, string, error) {
 		}},
 		"outbounds": []any{outbound, map[string]any{"protocol": "freedom", "tag": "direct"}},
 	}
-	path, err := writeJSON(cfg, paths.XrayConfig)
-	return path, serverIP, err
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	return data, serverIP, err
 }
 
-func writeJSON(v any, pathFn func() (string, error)) (string, error) {
-	data, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		return "", err
-	}
+func writeJSONBytes(data []byte, pathFn func() (string, error)) (string, error) {
 	path, err := pathFn()
 	if err != nil {
 		return "", err
@@ -154,7 +164,7 @@ func writeJSON(v any, pathFn func() (string, error)) (string, error) {
 
 // buildXrayOutbound converts a vless:// share URI into an Xray outbound, covering
 // TLS / Reality / uTLS and the tcp / xhttp / ws / grpc / httpupgrade transports.
-func buildXrayOutbound(uri string) (map[string]any, string, error) {
+func buildXrayOutbound(uri string, resolve func(string) string) (map[string]any, string, error) {
 	if !strings.HasPrefix(uri, "vless://") {
 		return nil, "", fmt.Errorf("only vless:// links are supported for now")
 	}
@@ -175,11 +185,8 @@ func buildXrayOutbound(uri string) (map[string]any, string, error) {
 	// looping back into the TUN, since process_name matching is unreliable there. On
 	// macOS the domain is kept as-is (process_name breaks the loop), and the IP is
 	// only used for the redundant, harmless direct rule.
-	serverIP := resolveServerIP(host)
-	addr := host
-	if serverIP != "" && runtime.GOOS == "windows" {
-		addr = serverIP
-	}
+	serverIP := resolve(host)
+	addr := connectAddress(host, serverIP, runtime.GOOS)
 
 	user := map[string]any{"id": uuid, "encryption": "none"}
 	if flow := q.Get("flow"); flow != "" {
@@ -236,6 +243,14 @@ func buildXrayOutbound(uri string) (map[string]any, string, error) {
 		}}},
 		"streamSettings": stream,
 	}, serverIP, nil
+}
+
+// connectAddress is what Xray dials: the host as given, or the pinned IP on Windows.
+func connectAddress(host, serverIP, goos string) string {
+	if serverIP != "" && goos == "windows" {
+		return serverIP
+	}
+	return host
 }
 
 func pathHost(q url.Values) map[string]any {

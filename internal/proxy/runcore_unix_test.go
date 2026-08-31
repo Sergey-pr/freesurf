@@ -79,7 +79,7 @@ func TestWriteJSONTightensAnExistingFile(t *testing.T) {
 	if err := os.WriteFile(path, []byte("{}"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := writeJSON(map[string]any{"a": 1}, func() (string, error) { return path, nil }); err != nil {
+	if _, err := writeJSONBytes([]byte(`{"a":1}`), func() (string, error) { return path, nil }); err != nil {
 		t.Fatal(err)
 	}
 	info, err := os.Stat(path)
