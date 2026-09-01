@@ -12,6 +12,8 @@ import {
   GetConnState,
   Connect,
   Disconnect,
+  GetSelectedNodeID,
+  SetSelectedNodeID,
 } from '../../bindings/freesurf/app.js'
 
 export const useServerStore = defineStore('servers', () => {
@@ -46,9 +48,9 @@ export const useServerStore = defineStore('servers', () => {
 
   async function load() {
     servers.value = (await GetServers()) ?? []
-    // Keep selection valid; default to the first available node.
+    // Keep selection valid; fall back to the remembered node, then to the first one.
     if (!selectedNode.value) {
-      selectedNodeId.value = firstNodeId()
+      selectedNodeId.value = (await GetSelectedNodeID()) || firstNodeId()
     }
   }
 
@@ -61,13 +63,14 @@ export const useServerStore = defineStore('servers', () => {
 
   function select(nodeId) {
     selectedNodeId.value = nodeId
+    SetSelectedNodeID(nodeId)
   }
 
   async function addFromClipboard() {
     const created = await AddFromClipboard()
     await load()
     if (created && created.nodes && created.nodes.length) {
-      selectedNodeId.value = created.nodes[0].id
+      select(created.nodes[0].id)
     }
     return created
   }

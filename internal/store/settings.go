@@ -11,7 +11,10 @@ import (
 var settingsTable = goqu.T("settings")
 
 // Setting keys.
-const keyAutoRefreshMinutes = "auto_refresh_minutes"
+const (
+	keyAutoRefreshMinutes = "auto_refresh_minutes"
+	keySelectedNodeURI    = "selected_node_uri"
+)
 
 // DefaultAutoRefreshMinutes is the out-of-the-box subscription refresh interval.
 const DefaultAutoRefreshMinutes = 30
@@ -60,4 +63,18 @@ func SetAutoRefreshMinutes(minutes int) error {
 		minutes = 1
 	}
 	return setSetting(keyAutoRefreshMinutes, strconv.Itoa(minutes))
+}
+
+// GetSelectedNodeURI returns the last selected node's URI, or "" if unset.
+func GetSelectedNodeURI() string {
+	v, found, err := getSetting(keySelectedNodeURI)
+	if err != nil || !found {
+		return ""
+	}
+	return v
+}
+
+// SetSelectedNodeURI persists the last selected node.
+func SetSelectedNodeURI(uri string) error {
+	return setSetting(keySelectedNodeURI, uri)
 }

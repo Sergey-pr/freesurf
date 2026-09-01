@@ -44,6 +44,19 @@ func GetNodeByID(id int64) (*Node, error) {
 	return &n, nil
 }
 
+// GetNodeByURI returns the first node with the given share URI, or nil if none.
+func GetNodeByURI(uri string) (*Node, error) {
+	var n Node
+	found, err := goquDB.From(nodeTable).
+		Where(goqu.C("uri").Eq(uri)).
+		Order(goqu.I("server_id").Asc(), goqu.I("sort_order").Asc(), goqu.I("id").Asc()).
+		ScanStruct(&n)
+	if err != nil || !found {
+		return nil, err
+	}
+	return &n, nil
+}
+
 // DeleteNodesByServer removes all nodes belonging to a server.
 func DeleteNodesByServer(serverID int64) error {
 	_, err := goquDB.Delete(nodeTable).Where(goqu.C("server_id").Eq(serverID)).Executor().Exec()

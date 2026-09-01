@@ -92,6 +92,35 @@ func (a *App) SetAutoRefreshMinutes(minutes int) int {
 	return store.GetAutoRefreshMinutes()
 }
 
+// GetSelectedNodeID returns the last selected node, resolved by URI so the choice
+// survives a subscription refresh that renumbers nodes. 0 means none.
+func (a *App) GetSelectedNodeID() int64 {
+	uri := store.GetSelectedNodeURI()
+	if uri == "" {
+		return 0
+	}
+	node, err := store.GetNodeByURI(uri)
+	if err != nil || node == nil {
+		return 0
+	}
+	return node.ID
+}
+
+// SetSelectedNodeID persists the selected node; 0 clears the selection.
+func (a *App) SetSelectedNodeID(id int64) {
+	uri := ""
+	if id != 0 {
+		node, err := store.GetNodeByID(id)
+		if err != nil {
+			return
+		}
+		uri = node.URI
+	}
+	if err := store.SetSelectedNodeURI(uri); err != nil {
+		a.showError(err)
+	}
+}
+
 type serverRefreshEvent struct {
 	ID    int64  `json:"id"`
 	Error string `json:"error,omitempty"`
