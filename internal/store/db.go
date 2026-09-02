@@ -14,13 +14,17 @@ import (
 // goquDB is the shared database connection used by all model methods.
 var goquDB *goqu.Database
 
-// InitDB opens the database, applies migrations, and wires the shared connection.
+// InitDB opens the app's database, applies migrations, and wires the connection.
 func InitDB() error {
 	dbPath, err := paths.DB()
 	if err != nil {
 		return err
 	}
+	return InitDBAt(dbPath)
+}
 
+// InitDBAt opens the database at dbPath. Tests point it at a scratch file.
+func InitDBAt(dbPath string) error {
 	sqlDB, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return err
