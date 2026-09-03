@@ -11,7 +11,11 @@ func openTestDB(t *testing.T) {
 	if err := InitDBAt(filepath.Join(t.TempDir(), "test.db")); err != nil {
 		t.Fatalf("InitDBAt: %v", err)
 	}
-	t.Cleanup(func() { goquDB = nil })
+	t.Cleanup(func() {
+		if err := CloseDB(); err != nil {
+			t.Errorf("CloseDB: %v", err)
+		}
+	})
 }
 
 // saveServer stores a subscription and returns it with its assigned ID.
@@ -43,7 +47,11 @@ func TestMigrationsAreIdempotent(t *testing.T) {
 			t.Fatalf("InitDBAt run %d: %v", i+1, err)
 		}
 	}
-	t.Cleanup(func() { goquDB = nil })
+	t.Cleanup(func() {
+		if err := CloseDB(); err != nil {
+			t.Errorf("CloseDB: %v", err)
+		}
+	})
 
 	var applied int
 	if err := goquDB.QueryRow(`SELECT count(*) FROM schema_migrations`).Scan(&applied); err != nil {
@@ -343,5 +351,47 @@ func TestSelectedNodeURI(t *testing.T) {
 	}
 	if got := GetSelectedNodeURI(); got != "vless://b@h:443" {
 		t.Errorf("selection = %q, want the newer URI", got)
+	}
+}
+
+// An open handle is invisible on Unix, so assert on the connection, not the file.
+func TestCloseDBReleasesTheConnection(t *testing.T) {
+	if err := InitDBAt(filepath.Join(t.TempDir(), "test.db")); err != nil {
+		t.Fatal(err)
+	}
+	handle := rawDB
+
+	if err := CloseDB(); err != nil {
+		t.Fatalf("CloseDB: %v", err)
+	}
+	if handle.Ping() == nil {
+		t.Error("the connection is still usable after CloseDB")
+	}
+	if rawDB != nil || goquDB != nil {
+		t.Error("CloseDB left the package pointing at a closed database")
+	}
+	if err := CloseDB(); err != nil {
+		t.Errorf("second CloseDB: %v", err)
+	}
+}
+
+// Reopening has to release the previous handle rather than strand it.
+func TestInitDBAtClosesThePreviousHandle(t *testing.T) {
+	dir := t.TempDir()
+	if err := InitDBAt(filepath.Join(dir, "first.db")); err != nil {
+		t.Fatal(err)
+	}
+	first := rawDB
+
+	if err := InitDBAt(filepath.Join(dir, "second.db")); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = CloseDB() })
+
+	if first.Ping() == nil {
+		t.Error("the first connection outlived the reopen")
+	}
+	if rawDB == first {
+		t.Error("the reopen kept the old handle")
 	}
 }

@@ -11,8 +11,11 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// goquDB is the shared database connection used by all model methods.
-var goquDB *goqu.Database
+// goquDB is the shared connection; rawDB is the same handle, kept to close it.
+var (
+	goquDB *goqu.Database
+	rawDB  *sql.DB
+)
 
 // InitDB opens the app's database, applies migrations, and wires the connection.
 func InitDB() error {
@@ -25,6 +28,9 @@ func InitDB() error {
 
 // InitDBAt opens the database at dbPath. Tests point it at a scratch file.
 func InitDBAt(dbPath string) error {
+	if err := CloseDB(); err != nil {
+		return err
+	}
 	sqlDB, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return err
@@ -46,5 +52,16 @@ func InitDBAt(dbPath string) error {
 	}
 
 	goquDB = goqu.New("sqlite3", sqlDB)
+	rawDB = sqlDB
 	return nil
+}
+
+// CloseDB releases the database file; Windows cannot delete one still open.
+func CloseDB() error {
+	if rawDB == nil {
+		return nil
+	}
+	err := rawDB.Close()
+	rawDB, goquDB = nil, nil
+	return err
 }
