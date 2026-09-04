@@ -21,18 +21,17 @@ type App struct {
 	logsWindow  *application.WebviewWindow
 	engine      *engine.Engine
 
-	refreshReset chan struct{} // ping to restart the auto-refresh timer (interval changed)
-	refreshStop  chan struct{} // closed to stop the auto-refresh loop
-	refreshMu    sync.Mutex    // guards against concurrent refreshAllSubscriptions runs
+	refresher *refresher
 }
 
 func NewApp() *App {
-	return &App{
-		engine:       engine.New(),
-		refreshReset: make(chan struct{}, 1),
-		refreshStop:  make(chan struct{}),
-	}
+	a := &App{engine: engine.New()}
+	a.refresher = newRefresher(subs.FetchSubscription, a.saveNodes, emitEvent)
+	return a
 }
+
+// emitEvent wraps the Wails bus so the refresher never touches the singleton.
+func emitEvent(name string, data ...any) { application.Get().Event.Emit(name, data...) }
 
 func (a *App) SetErrorWindow(w *application.WebviewWindow) { a.errorWindow = w }
 func (a *App) SetLogsWindow(w *application.WebviewWindow)  { a.logsWindow = w }
@@ -50,28 +49,8 @@ func (a *App) ServiceStartup(_ context.Context, _ application.ServiceOptions) er
 	if err := store.InitDB(); err != nil {
 		return err
 	}
-	go a.refreshAllSubscriptions()
-	go a.autoRefreshLoop()
+	a.refresher.Start()
 	return nil
-}
-
-// autoRefreshLoop periodically refreshes all subscriptions, using the interval
-// from settings. It restarts its timer when refreshReset is pinged (after the
-// interval changes) and exits when refreshStop is closed.
-func (a *App) autoRefreshLoop() {
-	for {
-		d := time.Duration(store.GetAutoRefreshMinutes()) * time.Minute
-		timer := time.NewTimer(d)
-		select {
-		case <-timer.C:
-			a.refreshAllSubscriptions()
-		case <-a.refreshReset:
-			timer.Stop()
-		case <-a.refreshStop:
-			timer.Stop()
-			return
-		}
-	}
 }
 
 // GetAutoRefreshMinutes returns the subscription auto-refresh interval (minutes).
@@ -85,10 +64,7 @@ func (a *App) SetAutoRefreshMinutes(minutes int) int {
 		a.showError(err)
 		return store.GetAutoRefreshMinutes()
 	}
-	select {
-	case a.refreshReset <- struct{}{}:
-	default:
-	}
+	a.refresher.Reset()
 	return store.GetAutoRefreshMinutes()
 }
 
@@ -133,63 +109,11 @@ type pingResultEvent struct {
 	MS     int   `json:"ms"`
 }
 
-func (a *App) refreshAllSubscriptions() {
-	// Skip if a refresh is already running (e.g. startup + timer overlap).
-	if !a.refreshMu.TryLock() {
-		return
-	}
-	defer a.refreshMu.Unlock()
-
-	servers, err := store.GetServers()
-	if err != nil {
-		return
-	}
-	subs_ := make([]store.ServerWithNodes, 0, len(servers))
-	for _, s := range servers {
-		if s.URL != nil && *s.URL != "" {
-			subs_ = append(subs_, s)
-		}
-	}
-	if len(subs_) == 0 {
-		return
-	}
-	for _, s := range subs_ {
-		application.Get().Event.Emit("servers:refreshing", serverRefreshEvent{ID: s.ID})
-		errMsg := a.doRefreshServer(&s.Server)
-		application.Get().Event.Emit("servers:refresh-done", serverRefreshEvent{ID: s.ID, Error: errMsg})
-	}
-	application.Get().Event.Emit("servers:changed")
-}
-
-// doRefreshServer fetches and saves updated nodes for s. Returns an error string (empty = success).
-func (a *App) doRefreshServer(server *store.Server) string {
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
-	defer cancel()
-
-	body, err := subs.FetchSubscription(ctx, *server.URL)
-	if err != nil {
-		return err.Error()
-	}
-	nodes := subs.NodesFromBody(body)
-	if subs.IsBlockedPlaceholder(nodes) {
-		return "subscription server rejected this client"
-	}
-	if len(nodes) == 0 {
-		return "no nodes found in subscription"
-	}
-	if err := store.DeleteNodesByServer(server.ID); err != nil {
-		return err.Error()
-	}
-	if _, err := a.saveServer(server, nodes); err != nil {
-		return err.Error()
-	}
-	return ""
-}
-
 func (a *App) ServiceShutdown() error {
-	close(a.refreshStop)
+	a.refresher.Stop()
 	a.engine.Shutdown()
-	return nil
+	// Safe only after the refresher has stopped querying it.
+	return store.CloseDB()
 }
 
 // UninstallHelper removes the privileged helper (one password prompt).
@@ -263,7 +187,7 @@ func (a *App) RefreshServer(id int64) *store.ServerWithNodes {
 	}
 
 	application.Get().Event.Emit("servers:refreshing", serverRefreshEvent{ID: id})
-	errMsg := a.doRefreshServer(server)
+	errMsg := a.refresher.RefreshServer(server)
 	application.Get().Event.Emit("servers:refresh-done", serverRefreshEvent{ID: id, Error: errMsg})
 	if errMsg != "" {
 		return nil
@@ -278,6 +202,12 @@ func (a *App) RefreshServer(id int64) *store.ServerWithNodes {
 }
 
 // saveServer inserts the server (if new) and its nodes, returning the combined view.
+// saveNodes stores a server and its nodes, discarding the assembled result.
+func (a *App) saveNodes(server *store.Server, nodes []store.Node) error {
+	_, err := a.saveServer(server, nodes)
+	return err
+}
+
 func (a *App) saveServer(server *store.Server, nodes []store.Node) (*store.ServerWithNodes, error) {
 	if err := server.Save(); err != nil {
 		return nil, err
