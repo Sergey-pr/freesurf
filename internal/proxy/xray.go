@@ -12,8 +12,7 @@ import (
 	"freesurf/internal/paths"
 )
 
-// Xray-core provides the proxy protocols sing-box lacks (notably XHTTP/splithttp
-// over h2/h3). It runs as a local SOCKS server that sing-box's TUN forwards to.
+// Xray-core handles the node's protocol as a local SOCKS server that the TUN feeds.
 const (
 	// RequiredXrayVersion is the pinned Xray-core release. Bumping it requires
 	// re-running cmd/fetchcores (the Taskfile build tasks do this automatically).

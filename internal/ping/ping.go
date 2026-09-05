@@ -1,4 +1,3 @@
-// Package ping measures TCP-connect latency to proxy node servers.
 package ping
 
 import (
@@ -15,7 +14,7 @@ import (
 )
 
 const (
-	timeout        = 5 * time.Second // TCP connect
+	timeout        = 5 * time.Second // one probe, TCP or QUIC
 	maxConcurrency = 16              // nodes probed at once in AllDetailed
 )
 
@@ -170,7 +169,9 @@ func quicProbe(addr string) error {
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
+	defer func() {
+		_ = conn.Close()
+	}()
 	_ = conn.SetDeadline(time.Now().Add(timeout))
 	if _, err := conn.Write(quicVersionNegotiationTrigger()); err != nil {
 		return err

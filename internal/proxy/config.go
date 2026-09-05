@@ -81,6 +81,7 @@ func SingboxConfig(serverIP string) ([]byte, error) {
 		// No "output": the privileged helper redirects sing-box's stderr to the log
 		// file, so we don't also open it from inside the core.
 		"log": map[string]any{"level": "info", "timestamp": true},
+		// 8.8.8.8 is deliberate: encrypted, exits at the proxy, blocked in fewer places.
 		"dns": map[string]any{
 			"servers": []any{
 				map[string]any{"type": "https", "tag": "proxy-dns", "server": "8.8.8.8", "server_port": 443, "path": "/dns-query", "detour": "proxy"},
