@@ -11,13 +11,8 @@ import (
 	"freesurf/internal/paths"
 )
 
-// We pin the sing-box-lx fork (same as singbox-launcher): it builds every
-// platform and its `version` output carries the full fork tag, so the check is
-// exact. The Xray side handles the actual proxy protocols.
 const (
-	// RequiredCoreVersion is the pinned sing-box-lx release. Bumping it requires
-	// re-running cmd/fetchcores (the Taskfile build tasks do this automatically).
-	RequiredCoreVersion = "1.13.13-lx.15"
+	RequiredCoreVersion = "1.13.21"
 )
 
 // EnsureCore installs the pinned sing-box binary (embedded at build time) if

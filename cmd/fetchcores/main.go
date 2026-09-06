@@ -30,7 +30,7 @@ import (
 )
 
 const (
-	singboxCoreRepo = "Leadaxe/sing-box-lx"
+	singboxCoreRepo = "SagerNet/sing-box"
 	xrayCoreRepo    = "XTLS/Xray-core"
 )
 
