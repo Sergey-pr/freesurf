@@ -5,12 +5,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
 	"regexp"
 
 	"freesurf/internal/paths"
+	"freesurf/internal/proxy"
 )
 
 // The app requests, the supervisor answers with a status; nothing else crosses over.
@@ -28,9 +30,13 @@ var nonceRe = regexp.MustCompile(`^[0-9a-f]{16}$`)
 
 // tunnelRequest is the run flag the supervisor watches, named by a nonce.
 type tunnelRequest struct {
-	Nonce    string `json:"nonce"`
-	ServerIP string `json:"serverIP,omitempty"`
+	Nonce    string       `json:"nonce"`
+	ServerIP string       `json:"serverIP,omitempty"`
+	Bypass   proxy.Bypass `json:"bypass"`
 }
+
+// maxRequestSize bounds what root reads from the unprivileged request file.
+const maxRequestSize = 1 << 20
 
 // tunnelStatus is the supervisor's report on the run named by Nonce.
 type tunnelStatus struct {
@@ -60,8 +66,13 @@ func writeRequest(path string, req tunnelRequest) error {
 
 // readRequest validates the request; root must not act on anything malformed.
 func readRequest(path string) (tunnelRequest, bool) {
-	data, err := os.ReadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
+		return tunnelRequest{}, false
+	}
+	data, err := io.ReadAll(io.LimitReader(f, maxRequestSize+1))
+	_ = f.Close()
+	if err != nil || len(data) > maxRequestSize {
 		return tunnelRequest{}, false
 	}
 	var req tunnelRequest
@@ -72,6 +83,9 @@ func readRequest(path string) (tunnelRequest, bool) {
 		return tunnelRequest{}, false
 	}
 	if req.ServerIP != "" && net.ParseIP(req.ServerIP) == nil {
+		return tunnelRequest{}, false
+	}
+	if req.Bypass.Validate() != nil {
 		return tunnelRequest{}, false
 	}
 	return req, true

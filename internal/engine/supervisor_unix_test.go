@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -28,38 +29,41 @@ func fakeCore(t *testing.T, dir string) (bin, marker string) {
 	return bin, marker
 }
 
-func supervisorHarness(t *testing.T) (files rootFiles, request string, stop chan struct{}, done chan struct{}) {
+// supervisorFiles lays out the root-owned files around a fake core, returning its marker too.
+func supervisorFiles(t *testing.T) (files rootFiles, request, marker string) {
 	t.Helper()
 	dir := t.TempDir()
-	bin, _ := fakeCore(t, dir)
-
+	bin, marker := fakeCore(t, dir)
 	files = rootFiles{
 		singbox: bin,
 		config:  filepath.Join(dir, "config.json"),
+		rules:   filepath.Join(dir, "rules"),
 		log:     filepath.Join(dir, "sing-box.log"),
 		status:  filepath.Join(dir, "status.json"),
 	}
-	request = filepath.Join(dir, "tunnel.run")
+	return files, filepath.Join(dir, "tunnel.run"), marker
+}
 
+// runSupervisor starts one supervisor and returns a stop that waits for it to exit.
+// Cleanup calls stop too, so a test that fails early never leaves the loop running.
+func runSupervisor(t *testing.T, files rootFiles, request string) (stop func()) {
+	t.Helper()
 	old := supervisorTick
 	supervisorTick = 5 * time.Millisecond
-	t.Cleanup(func() { supervisorTick = old })
 
-	stop = make(chan struct{})
-	done = make(chan struct{})
+	quit := make(chan struct{})
+	done := make(chan struct{})
 	go func() {
-		superviseTunnel(files, request, stop, log.New(io.Discard, "", 0))
+		superviseTunnel(files, request, quit, log.New(io.Discard, "", 0))
 		close(done)
 	}()
-	t.Cleanup(func() {
-		select {
-		case <-stop:
-		default:
-			close(stop)
-		}
+	stop = sync.OnceFunc(func() {
+		close(quit)
 		<-done
+		supervisorTick = old
 	})
-	return files, request, stop, done
+	t.Cleanup(stop)
+	return stop
 }
 
 func waitForState(t *testing.T, statusPath, want string) tunnelStatus {
@@ -77,7 +81,8 @@ func waitForState(t *testing.T, statusPath, want string) tunnelStatus {
 }
 
 func TestSupervisorRunsWhileRequested(t *testing.T) {
-	files, request, _, _ := supervisorHarness(t)
+	files, request, _ := supervisorFiles(t)
+	runSupervisor(t, files, request)
 	const nonce = "0123456789abcdef"
 
 	if err := writeRequest(request, tunnelRequest{Nonce: nonce, ServerIP: "198.51.100.7"}); err != nil {
@@ -151,7 +156,8 @@ func containsIP(t *testing.T, cfg []byte, ip string) bool {
 
 // A request the supervisor cannot vouch for must leave the tunnel down.
 func TestSupervisorIgnoresInvalidRequest(t *testing.T) {
-	files, request, _, _ := supervisorHarness(t)
+	files, request, _ := supervisorFiles(t)
+	runSupervisor(t, files, request)
 
 	if err := os.WriteFile(request, []byte(`{"nonce":"nope","serverIP":"1.2.3.4"}`), 0600); err != nil {
 		t.Fatal(err)
@@ -168,7 +174,8 @@ func TestSupervisorIgnoresInvalidRequest(t *testing.T) {
 
 // Reconnecting without a stop in between must restart the core on the new run.
 func TestSupervisorRestartsOnNewNonce(t *testing.T) {
-	files, request, _, _ := supervisorHarness(t)
+	files, request, _ := supervisorFiles(t)
+	runSupervisor(t, files, request)
 
 	if err := writeRequest(request, tunnelRequest{Nonce: "0123456789abcdef", ServerIP: "198.51.100.7"}); err != nil {
 		t.Fatal(err)
@@ -197,17 +204,9 @@ func TestSupervisorRestartsOnNewNonce(t *testing.T) {
 }
 
 func TestSupervisorReportsAFailedStart(t *testing.T) {
-	files, request, _, _ := supervisorHarness(t)
+	files, request, _ := supervisorFiles(t)
 	files.singbox = filepath.Join(t.TempDir(), "does-not-exist")
-
-	// Restart the loop against the broken core path.
-	stop := make(chan struct{})
-	done := make(chan struct{})
-	go func() {
-		superviseTunnel(files, request, stop, log.New(io.Discard, "", 0))
-		close(done)
-	}()
-	defer func() { close(stop); <-done }()
+	runSupervisor(t, files, request)
 
 	if err := writeRequest(request, tunnelRequest{Nonce: "0123456789abcdef"}); err != nil {
 		t.Fatal(err)
@@ -220,27 +219,8 @@ func TestSupervisorReportsAFailedStart(t *testing.T) {
 
 // Asked to stop, sing-box unwinds its routes; killed, it strands the default route.
 func TestSupervisorTerminatesCoreGently(t *testing.T) {
-	dir := t.TempDir()
-	bin, marker := fakeCore(t, dir)
-	files := rootFiles{
-		singbox: bin,
-		config:  filepath.Join(dir, "config.json"),
-		log:     filepath.Join(dir, "sing-box.log"),
-		status:  filepath.Join(dir, "status.json"),
-	}
-	request := filepath.Join(dir, "tunnel.run")
-
-	old := supervisorTick
-	supervisorTick = 5 * time.Millisecond
-	defer func() { supervisorTick = old }()
-
-	stop := make(chan struct{})
-	done := make(chan struct{})
-	go func() {
-		superviseTunnel(files, request, stop, log.New(io.Discard, "", 0))
-		close(done)
-	}()
-	defer func() { <-done }()
+	files, request, marker := supervisorFiles(t)
+	stop := runSupervisor(t, files, request)
 
 	if err := writeRequest(request, tunnelRequest{Nonce: "0123456789abcdef"}); err != nil {
 		t.Fatal(err)
@@ -253,7 +233,7 @@ func TestSupervisorTerminatesCoreGently(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitForState(t, files.status, tunnelStopped)
-	close(stop)
+	stop()
 
 	got, err := os.ReadFile(marker)
 	if err != nil {

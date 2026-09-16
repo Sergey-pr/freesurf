@@ -6,10 +6,11 @@ import (
 	"time"
 
 	"freesurf/internal/paths"
+	"freesurf/internal/proxy"
 )
 
 // startTunnel requests the tunnel for the pinned serverIP, returning this run's nonce.
-func startTunnel(serverIP string) (string, error) {
+func startTunnel(serverIP string, bypass proxy.Bypass) (string, error) {
 	path, err := paths.Sentinel()
 	if err != nil {
 		return "", err
@@ -18,7 +19,7 @@ func startTunnel(serverIP string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := writeRequest(path, tunnelRequest{Nonce: nonce, ServerIP: serverIP}); err != nil {
+	if err := writeRequest(path, tunnelRequest{Nonce: nonce, ServerIP: serverIP, Bypass: bypass}); err != nil {
 		return "", err
 	}
 	return nonce, nil

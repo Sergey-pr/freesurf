@@ -37,7 +37,7 @@ const (
 
 	// Bump when the service definition or supervisor behaviour changes to force a
 	// one-time reinstall.
-	helperVersion = "3"
+	helperVersion = "4"
 
 	// Internal flags handled by MaybeRunService before the GUI starts.
 	flagInstallService   = "--freesurf-install-service"
@@ -53,6 +53,7 @@ func windowsRootFiles() rootFiles {
 		exe:     filepath.Join(dir, "freesurf.exe"),
 		singbox: filepath.Join(dir, "sing-box.exe"),
 		config:  filepath.Join(dir, "config.json"),
+		rules:   filepath.Join(dir, "rules"),
 		log:     filepath.Join(dir, "sing-box.log"),
 		status:  filepath.Join(dir, "status.json"),
 	}

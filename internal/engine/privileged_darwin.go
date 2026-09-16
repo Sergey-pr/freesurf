@@ -34,13 +34,14 @@ const (
 	rootSingboxPath  = rootHelperDir + "/sing-box"
 	rootExePath      = rootHelperDir + "/freesurf"
 	rootConfigPath   = rootHelperDir + "/config.json"
+	rootRulesDir     = rootHelperDir + "/rules"
 	rootCoreLogPath  = rootHelperDir + "/sing-box.log"
 	rootStatusPath   = rootHelperDir + "/status.json"
 	rootVersionFile  = rootHelperDir + "/helper.version"
 	rootSupervisorLg = rootHelperDir + "/supervisor.log"
 
 	// Bump when the plist/supervisor format changes to force a one-time reinstall.
-	helperVersion = "3"
+	helperVersion = "4"
 )
 
 func darwinRootFiles() rootFiles {
@@ -48,6 +49,7 @@ func darwinRootFiles() rootFiles {
 		exe:     rootExePath,
 		singbox: rootSingboxPath,
 		config:  rootConfigPath,
+		rules:   rootRulesDir,
 		log:     rootCoreLogPath,
 		status:  rootStatusPath,
 	}

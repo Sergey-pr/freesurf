@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"freesurf/internal/proxy"
 	"freesurf/internal/store"
 )
 
@@ -84,14 +85,14 @@ func newHarness(t *testing.T) *harness {
 			ensureCore:      func(context.Context) (string, error) { return "sing-box", nil },
 			ensureXray:      func(context.Context) (string, error) { return "xray", nil },
 			writeXrayConfig: func(*store.Node) (string, string, error) { return h.path("xray.json"), "192.0.2.1", nil },
-			singboxConfig:   func(string) ([]byte, error) { return []byte("{}"), nil },
+			singboxConfig:   func(string, proxy.Bypass) ([]byte, error) { return []byte("{}"), nil },
 			checkConfig:     func(string, []byte) error { return nil },
 			helperInstalled: func() bool { return true },
 			ensureHelper:    func(string) error { return nil },
 			coreLog:         func() (string, error) { return h.path("sing-box.log"), nil },
 			xrayLog:         func() (string, error) { return h.path("xray.log"), nil },
 			runXray:         func(string, string, string) (process, error) { return h.newProc(), nil },
-			startTunnel: func(serverIP string) (string, error) {
+			startTunnel: func(serverIP string, _ proxy.Bypass) (string, error) {
 				h.bump(&h.tunnelUp)
 				h.setServerIP(serverIP)
 				return "0123456789abcdef", nil
@@ -192,7 +193,7 @@ func testNode() *store.Node {
 func TestConnectBringsTunnelUp(t *testing.T) {
 	h := newHarness(t)
 
-	state, err := h.e.Connect(testNode())
+	state, err := h.e.Connect(testNode(), proxy.Bypass{})
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
@@ -233,8 +234,10 @@ func TestConnectFailureCleansUp(t *testing.T) {
 			breakDep: func(d *deps, err error) { d.ensureHelper = func(string) error { return err } },
 		},
 		{
-			name:       "tunnel start fails",
-			breakDep:   func(d *deps, err error) { d.startTunnel = func(string) (string, error) { return "", err } },
+			name: "tunnel start fails",
+			breakDep: func(d *deps, err error) {
+				d.startTunnel = func(string, proxy.Bypass) (string, error) { return "", err }
+			},
 			wantKilled: true,
 		},
 		{
@@ -251,7 +254,7 @@ func TestConnectFailureCleansUp(t *testing.T) {
 			boom := errors.New("boom")
 			tc.breakDep(&h.e.deps, boom)
 
-			state, err := h.e.Connect(testNode())
+			state, err := h.e.Connect(testNode(), proxy.Bypass{})
 			if !errors.Is(err, boom) {
 				t.Fatalf("Connect error = %v, want boom", err)
 			}
@@ -276,7 +279,7 @@ func TestConnectFailureCleansUp(t *testing.T) {
 
 func TestDisconnectStopsBackendAndWatchers(t *testing.T) {
 	h := newHarness(t)
-	if _, err := h.e.Connect(testNode()); err != nil {
+	if _, err := h.e.Connect(testNode(), proxy.Bypass{}); err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
 	stop := h.stopChan()
@@ -304,7 +307,7 @@ func TestDisconnectStopsBackendAndWatchers(t *testing.T) {
 
 func TestMonitorReportsBackendDeath(t *testing.T) {
 	h := newHarness(t)
-	if _, err := h.e.Connect(testNode()); err != nil {
+	if _, err := h.e.Connect(testNode(), proxy.Bypass{}); err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
 	stop := h.stopChan()
@@ -328,12 +331,12 @@ func TestMonitorReportsBackendDeath(t *testing.T) {
 // A second Connect must not strand the previous generation's watchers.
 func TestReconnectClosesPreviousGeneration(t *testing.T) {
 	h := newHarness(t)
-	if _, err := h.e.Connect(testNode()); err != nil {
+	if _, err := h.e.Connect(testNode(), proxy.Bypass{}); err != nil {
 		t.Fatalf("first Connect: %v", err)
 	}
 	first := h.stopChan()
 
-	if _, err := h.e.Connect(testNode()); err != nil {
+	if _, err := h.e.Connect(testNode(), proxy.Bypass{}); err != nil {
 		t.Fatalf("second Connect: %v", err)
 	}
 	select {
@@ -356,7 +359,7 @@ func TestConcurrentConnectDisconnect(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, _ = h.e.Connect(testNode())
+			_, _ = h.e.Connect(testNode(), proxy.Bypass{})
 		}()
 		wg.Add(1)
 		go func() {
@@ -485,12 +488,12 @@ func TestConnectRefusesASecondAttempt(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := h.e.Connect(testNode())
+		_, err := h.e.Connect(testNode(), proxy.Bypass{})
 		done <- err
 	}()
 	<-entered
 
-	if _, err := h.e.Connect(testNode()); !errors.Is(err, ErrBusy) {
+	if _, err := h.e.Connect(testNode(), proxy.Bypass{}); !errors.Is(err, ErrBusy) {
 		t.Fatalf("second Connect error = %v, want ErrBusy", err)
 	}
 	close(release)
@@ -516,7 +519,7 @@ func TestDisconnectCancelsAConnectInFlight(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := h.e.Connect(testNode())
+		_, err := h.e.Connect(testNode(), proxy.Bypass{})
 		done <- err
 	}()
 	<-entered
@@ -551,7 +554,7 @@ func TestCancelAfterBackendStartedStopsIt(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := h.e.Connect(testNode())
+		_, err := h.e.Connect(testNode(), proxy.Bypass{})
 		done <- err
 	}()
 	<-entered
@@ -573,13 +576,13 @@ func TestCancelAfterBackendStartedStopsIt(t *testing.T) {
 // Switching nodes without an explicit Disconnect must not orphan the old backend.
 func TestConnectSwitchingNodesStopsTheOldBackend(t *testing.T) {
 	h := newHarness(t)
-	if _, err := h.e.Connect(testNode()); err != nil {
+	if _, err := h.e.Connect(testNode(), proxy.Bypass{}); err != nil {
 		t.Fatalf("first Connect: %v", err)
 	}
 	first := h.lastProc()
 
 	other := &store.Node{ID: 9, Name: "node-9", URI: "vless://uuid@example.org:443"}
-	if _, err := h.e.Connect(other); err != nil {
+	if _, err := h.e.Connect(other, proxy.Bypass{}); err != nil {
 		t.Fatalf("second Connect: %v", err)
 	}
 	if first.kills() == 0 {

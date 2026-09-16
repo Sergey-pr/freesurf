@@ -14,4 +14,8 @@ var assetDigests = map[string]string{
 	"Xray-windows-64.zip":        "d004c39288ce9ada487c6f398c7c545f7d749e44bdfdd59dbc9f865afba4e1ad",
 	"Xray-windows-arm64-v8a.zip": "35d4ed6ec21224fb22b07c2c3f672e2350cd536f2c74d309150175a76365ea88",
 	"Xray-windows-32.zip":        "956a5ec00bce747c7936dc4ff7ac570df1c8030b0a4a8640f843488365084db3",
+
+	// Rule-sets at the commits pinned in ruleSets
+	"geoip-ru.srs":            "6e23f5580dd443e2f9c4895adafee8d199c1a3487182ad5f0a2256cf59c7e53a",
+	"geosite-category-ru.srs": "c36e157adf86edf7b722b51f3acb93bbb2a7f8083932dae29b4b5ef2c1ced870",
 }

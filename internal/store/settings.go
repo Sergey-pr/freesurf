@@ -14,6 +14,7 @@ var settingsTable = goqu.T("settings")
 const (
 	keyAutoRefreshMinutes = "auto_refresh_minutes"
 	keySelectedNodeURI    = "selected_node_uri"
+	keyBypassRules        = "bypass_rules"
 )
 
 // DefaultAutoRefreshMinutes is the out-of-the-box subscription refresh interval.
@@ -77,4 +78,18 @@ func GetSelectedNodeURI() string {
 // SetSelectedNodeURI persists the last selected node.
 func SetSelectedNodeURI(uri string) error {
 	return setSetting(keySelectedNodeURI, uri)
+}
+
+// GetBypassRules returns the raw bypass list text, or "" if unset.
+func GetBypassRules() string {
+	v, found, err := getSetting(keyBypassRules)
+	if err != nil || !found {
+		return ""
+	}
+	return v
+}
+
+// SetBypassRules persists the raw bypass list text.
+func SetBypassRules(text string) error {
+	return setSetting(keyBypassRules, text)
 }

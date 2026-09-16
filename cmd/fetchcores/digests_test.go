@@ -12,6 +12,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"freesurf/internal/proxy"
 )
 
 // supportedTargets reads the cores directories, so a new platform demands digests.
@@ -64,9 +66,28 @@ func TestNoStaleDigests(t *testing.T) {
 		used[singboxAssetName(target[0], target[1])] = true
 		used[xrayAssetName(target[0], target[1])] = true
 	}
+	for _, rs := range ruleSets {
+		used[rs.name] = true
+	}
 	for asset := range assetDigests {
 		if !used[asset] {
 			t.Errorf("pinned digest for %q belongs to no supported target", asset)
+		}
+	}
+}
+
+// Every rule-set the app can reference must be fetched and pinned.
+func TestEveryRuleSetIsFetched(t *testing.T) {
+	fetched := map[string]bool{}
+	for _, rs := range ruleSets {
+		fetched[rs.name] = true
+		if _, ok := assetDigests[rs.name]; !ok {
+			t.Errorf("rule-set %q has no pinned digest", rs.name)
+		}
+	}
+	for tag, name := range proxy.GeoRuleSets {
+		if !fetched[name] {
+			t.Errorf("%s needs %q, which fetchcores does not download", tag, name)
 		}
 	}
 }

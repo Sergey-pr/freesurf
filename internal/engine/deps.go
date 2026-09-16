@@ -22,14 +22,14 @@ type deps struct {
 	ensureCore      func(context.Context) (string, error)
 	ensureXray      func(context.Context) (string, error)
 	writeXrayConfig func(*store.Node) (cfgPath, serverIP string, err error)
-	singboxConfig   func(serverIP string) ([]byte, error)
+	singboxConfig   func(serverIP string, bypass proxy.Bypass) ([]byte, error)
 	checkConfig     func(binPath string, cfg []byte) error
 	helperInstalled func() bool
 	ensureHelper    func(singboxBin string) error
 	coreLog         func() (string, error)
 	xrayLog         func() (string, error)
 	runXray         func(binPath, cfgPath, logPath string) (process, error)
-	startTunnel     func(serverIP string) (nonce string, err error)
+	startTunnel     func(serverIP string, bypass proxy.Bypass) (nonce string, err error)
 	waitTunnelUp    func(nonce string, timeout time.Duration) error
 	stopTunnel      func()
 	emit            func(name string, data ...any)
@@ -40,7 +40,7 @@ func defaultDeps() deps {
 		ensureCore:      proxy.EnsureCore,
 		ensureXray:      proxy.EnsureXray,
 		writeXrayConfig: proxy.WriteXrayConfig,
-		singboxConfig:   proxy.SingboxConfig,
+		singboxConfig:   checkedSingboxConfig,
 		checkConfig:     proxy.CheckConfig,
 		helperInstalled: HelperInstalled,
 		ensureHelper:    EnsureHelper,
@@ -61,4 +61,16 @@ func defaultDeps() deps {
 		stopTunnel: stopTunnel,
 		emit:       func(name string, data ...any) { application.Get().Event.Emit(name, data...) },
 	}
+}
+
+// checkedSingboxConfig builds the pre-flight config against rule-sets in the user data dir.
+func checkedSingboxConfig(serverIP string, bypass proxy.Bypass) ([]byte, error) {
+	dir, err := paths.Rules()
+	if err != nil {
+		return nil, err
+	}
+	if err := proxy.WriteRuleSets(dir); err != nil {
+		return nil, err
+	}
+	return proxy.SingboxConfig(serverIP, bypass, dir)
 }

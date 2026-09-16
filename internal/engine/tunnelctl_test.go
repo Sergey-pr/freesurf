@@ -26,6 +26,11 @@ func TestReadRequestRejectsUntrustedInput(t *testing.T) {
 		{name: "serverIP is a hostname", raw: `{"nonce":"` + goodNonce + `","serverIP":"evil.example.com"}`},
 		{name: "serverIP is a command", raw: `{"nonce":"` + goodNonce + `","serverIP":"1.2.3.4; rm -rf /"}`},
 		{name: "serverIP is a CIDR", raw: `{"nonce":"` + goodNonce + `","serverIP":"0.0.0.0/0"}`},
+		{name: "valid bypass", raw: `{"nonce":"` + goodNonce + `","bypass":{"cidrs":["10.0.0.0/8"],"domains":["example.com"],"geo":["geoip:ru"]}}`, want: true},
+		{name: "bypass domain injects JSON", raw: `{"nonce":"` + goodNonce + `","bypass":{"domains":["a.com\",\"x"]}}`},
+		{name: "bypass geo is a path", raw: `{"nonce":"` + goodNonce + `","bypass":{"geo":["../../etc/passwd"]}}`},
+		{name: "bypass CIDR malformed", raw: `{"nonce":"` + goodNonce + `","bypass":{"cidrs":["10.0.0.0/99"]}}`},
+		{name: "oversized", raw: `{"nonce":"` + goodNonce + `","pad":"` + strings.Repeat("x", maxRequestSize) + `"}`},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

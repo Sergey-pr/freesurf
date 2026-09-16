@@ -9,6 +9,7 @@ import (
 
 	"freesurf/internal/engine"
 	"freesurf/internal/ping"
+	"freesurf/internal/proxy"
 	"freesurf/internal/store"
 	"freesurf/internal/subs"
 
@@ -313,12 +314,33 @@ func (a *App) Connect(nodeID int64) engine.ConnState {
 		a.showError(err)
 		return a.engine.State()
 	}
-	state, err := a.engine.Connect(node)
+	bypass, err := proxy.ParseBypass(store.GetBypassRules())
+	if err != nil {
+		a.showError(fmt.Errorf("bypass list: %w", err))
+		return a.engine.State()
+	}
+	state, err := a.engine.Connect(node, bypass)
 	// A double-click or a Stop mid-connect is not worth a dialog.
 	if err != nil && !errors.Is(err, engine.ErrBusy) && !errors.Is(err, engine.ErrCancelled) {
 		a.showError(err)
 	}
 	return state
+}
+
+// GetBypassRules returns the bypass list as the user typed it.
+func (a *App) GetBypassRules() string { return store.GetBypassRules() }
+
+// SetBypassRules validates and saves the bypass list; it applies on the next connect.
+func (a *App) SetBypassRules(text string) bool {
+	if _, err := proxy.ParseBypass(text); err != nil {
+		a.showError(fmt.Errorf("bypass list: %w", err))
+		return false
+	}
+	if err := store.SetBypassRules(text); err != nil {
+		a.showError(err)
+		return false
+	}
+	return true
 }
 
 func (a *App) Disconnect() engine.ConnState { return a.engine.Disconnect() }

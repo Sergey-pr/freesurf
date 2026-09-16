@@ -14,6 +14,18 @@
           />
         </label>
 
+        <label class="settings-field">
+          <span class="field-label">Bypass VPN (one per line)</span>
+          <textarea
+            class="field-input field-textarea"
+            rows="6"
+            spellcheck="false"
+            placeholder="geoip:ru&#10;geosite:category-ru&#10;domain:example.com&#10;192.168.0.0/16"
+            v-model="bypass"
+          ></textarea>
+          <span class="field-hint">Applies on next connect</span>
+        </label>
+
         <div class="settings-field">
           <span class="field-label">Dependencies (sing-box, Xray cores)</span>
           <button class="btn-secondary" :disabled="reinstalling" @click="reinstall">
@@ -36,7 +48,7 @@
 
 <script setup>
 import { ref, watch } from 'vue'
-import { GetAutoRefreshMinutes, SetAutoRefreshMinutes, ReinstallDependencies } from '../../bindings/freesurf/app.js'
+import { GetAutoRefreshMinutes, SetAutoRefreshMinutes, GetBypassRules, SetBypassRules, ReinstallDependencies } from '../../bindings/freesurf/app.js'
 
 const props = defineProps({
   visible: Boolean,
@@ -44,6 +56,7 @@ const props = defineProps({
 const emit = defineEmits(['close'])
 
 const minutes = ref(30)
+const bypass = ref('')
 const reinstalling = ref(false)
 const reinstallDone = ref(false)
 
@@ -53,6 +66,7 @@ watch(
     if (open) {
       reinstallDone.value = false
       minutes.value = await GetAutoRefreshMinutes()
+      bypass.value = await GetBypassRules()
     }
   }
 )
@@ -69,6 +83,8 @@ async function reinstall() {
 }
 
 async function save() {
+  // An invalid list keeps the dialog open; the error window says which line.
+  if (!(await SetBypassRules(bypass.value))) return
   const v = Math.max(1, Math.round(Number(minutes.value) || 30))
   minutes.value = await SetAutoRefreshMinutes(v)
   emit('close')
@@ -122,6 +138,11 @@ async function save() {
   color: var(--text);
   font-size: 13px;
   padding: 7px 10px;
+}
+.field-textarea {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 12px;
+  resize: vertical;
 }
 .field-input:focus {
   outline: none;

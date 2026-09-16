@@ -14,6 +14,7 @@ type rootFiles struct {
 	exe     string // root-owned copy of this binary, run by launchd / the SCM
 	singbox string
 	config  string
+	rules   string // directory for the rule-set files the config references
 	log     string
 	status  string
 }
@@ -99,7 +100,11 @@ func superviseTunnel(files rootFiles, requestPath string, stop <-chan struct{}, 
 func startCore(files rootFiles, req tunnelRequest, lg *log.Logger, core **proxy.Process, running *tunnelRequest) {
 	_ = writeStatus(files.status, tunnelStatus{Nonce: req.Nonce, State: tunnelStarting})
 
-	cfg, err := proxy.SingboxConfig(req.ServerIP)
+	err := proxy.WriteRuleSets(files.rules)
+	var cfg []byte
+	if err == nil {
+		cfg, err = proxy.SingboxConfig(req.ServerIP, req.Bypass, files.rules)
+	}
 	if err == nil {
 		// Only root reads this config; the chmod also narrows one already on disk.
 		err = os.WriteFile(files.config, cfg, 0600)

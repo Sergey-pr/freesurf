@@ -26,3 +26,5 @@ internal/proxy/cores/*/*
 .vscode/launch.json
 
 *.local*
+internal/proxy/rulesets/*
+!internal/proxy/rulesets/README.md

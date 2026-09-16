@@ -69,7 +69,7 @@ func TestSingboxAcceptsGeneratedConfig(t *testing.T) {
 			name = serverIP
 		}
 		t.Run(name, func(t *testing.T) {
-			cfg, err := SingboxConfig(serverIP)
+			cfg, err := SingboxConfig(serverIP, Bypass{}, "")
 			if err != nil {
 				t.Fatalf("SingboxConfig: %v", err)
 			}
@@ -78,4 +78,21 @@ func TestSingboxAcceptsGeneratedConfig(t *testing.T) {
 			}
 		})
 	}
+	t.Run("bypass", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := WriteRuleSets(dir); err != nil {
+			t.Fatal(err)
+		}
+		bypass, err := ParseBypass("geoip:ru\ngeosite:category-ru\n10.1.0.0/16\n203.0.113.5\ndomain:example.com\nyandex.ru")
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := SingboxConfig("198.51.100.7", bypass, dir)
+		if err != nil {
+			t.Fatalf("SingboxConfig: %v", err)
+		}
+		if err := CheckConfig(bin, cfg); err != nil {
+			t.Fatalf("sing-box rejected the config: %v", err)
+		}
+	})
 }

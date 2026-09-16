@@ -183,7 +183,7 @@ func (e *Engine) ReinstallCores() error {
 // Connect brings up the tunnel to the given node, reporting progress through the
 // "vpn:state" event. The returned error (if any) is for the caller to surface;
 // the state is already emitted.
-func (e *Engine) Connect(node *store.Node) (ConnState, error) {
+func (e *Engine) Connect(node *store.Node, bypass proxy.Bypass) (ConnState, error) {
 	ctx, err := e.beginConnect()
 	if err != nil {
 		return e.State(), err
@@ -212,7 +212,7 @@ func (e *Engine) Connect(node *store.Node) (ConnState, error) {
 	if err != nil {
 		return e.fail(node.ID, err)
 	}
-	cfg, err := e.deps.singboxConfig(serverIP)
+	cfg, err := e.deps.singboxConfig(serverIP, bypass)
 	if err != nil {
 		return e.fail(node.ID, err)
 	}
@@ -257,7 +257,7 @@ func (e *Engine) Connect(node *store.Node) (ConnState, error) {
 
 	e.setState(ConnState{Status: StatusConnecting, NodeID: node.ID, Message: "Starting tunnel…"})
 	e.logf("Starting tunnel…")
-	nonce, err := e.deps.startTunnel(serverIP)
+	nonce, err := e.deps.startTunnel(serverIP, bypass)
 	if err != nil {
 		stopProcess(xray)
 		return e.fail(node.ID, err)

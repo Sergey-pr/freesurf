@@ -34,6 +34,12 @@ const (
 	xrayCoreRepo    = "XTLS/Xray-core"
 )
 
+// ruleSets pins each embedded rule-set to a commit on its repo's rule-set branch.
+var ruleSets = []struct{ repo, commit, name string }{
+	{"SagerNet/sing-geoip", "7fe82a879ad2666526730c195b55a6d8d9147908", "geoip-ru.srs"},
+	{"SagerNet/sing-geosite", "2188cad8cff230c36953175811304957e6d04326", "geosite-category-ru.srs"},
+}
+
 func main() {
 	targetOS := flag.String("os", runtime.GOOS, "target GOOS (darwin, windows)")
 	targetArch := flag.String("arch", runtime.GOARCH, "target GOARCH (amd64, arm64, 386)")
@@ -52,6 +58,13 @@ func main() {
 		log.Fatalf("unsupported target %s/%s: %v", *targetOS, *targetArch, err)
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	if err := fetchRuleSets(ctx, filepath.Join(filepath.Dir(*dest), "rulesets")); err != nil {
+		log.Fatalf("rule-sets: %v", err)
+	}
+
 	want := fmt.Sprintf("sing-box=%s\nxray=%s\n", proxy.RequiredCoreVersion, proxy.RequiredXrayVersion)
 	versionsPath := filepath.Join(dir, "VERSIONS")
 	if cur, err := os.ReadFile(versionsPath); err == nil && string(cur) == want &&
@@ -59,9 +72,6 @@ func main() {
 		fmt.Printf("cores for %s/%s already at pinned versions, nothing to do\n", *targetOS, *targetArch)
 		return
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
 
 	log.Printf("fetching sing-box v%s for %s/%s…", proxy.RequiredCoreVersion, *targetOS, *targetArch)
 	if err := fetchSingbox(ctx, *targetOS, *targetArch, filepath.Join(dir, paths.SingboxName)); err != nil {
@@ -75,6 +85,44 @@ func main() {
 		log.Fatal(err)
 	}
 	fmt.Printf("cores for %s/%s ready in %s\n", *targetOS, *targetArch, dir)
+}
+
+// fetchRuleSets downloads any missing rule-set; a digest pins each one, so presence is enough.
+func fetchRuleSets(ctx context.Context, dir string) error {
+	for _, rs := range ruleSets {
+		dest := filepath.Join(dir, rs.name)
+		if fileExists(dest) {
+			if sum, err := fileSHA256(dest); err == nil && verifyDigest(rs.name, sum) == nil {
+				continue
+			}
+		}
+		log.Printf("fetching rule-set %s…", rs.name)
+		url := fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/%s", rs.repo, rs.commit, rs.name)
+		sum, err := httpDownload(ctx, url, dest)
+		if err == nil {
+			err = verifyDigest(rs.name, sum)
+		}
+		if err != nil {
+			_ = os.Remove(dest)
+			return fmt.Errorf("%s: %w", rs.name, err)
+		}
+	}
+	return nil
+}
+
+func fileSHA256(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer func() {
+		_ = f.Close()
+	}()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // repoRoot walks up from the working directory to the directory holding go.mod,

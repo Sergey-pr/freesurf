@@ -59,7 +59,8 @@ func ipToCIDR(ip net.IP) string {
 }
 
 // SingboxConfig builds the sing-box config; serverIP is routed direct to break the loop.
-func SingboxConfig(serverIP string) ([]byte, error) {
+// Bypass rules reference rule-set files in ruleSetDir (see WriteRuleSets).
+func SingboxConfig(serverIP string, bypass Bypass, ruleSetDir string) ([]byte, error) {
 	stack, strictRoute := tunOptions()
 
 	// Break the routing loop: Xray's connection to the proxy server must go out
@@ -71,6 +72,12 @@ func SingboxConfig(serverIP string) ([]byte, error) {
 		map[string]any{"protocol": "dns", "action": "hijack-dns"},
 		map[string]any{"process_name": []any{xrayProcessName()}, "outbound": "direct"},
 		map[string]any{"ip_is_private": true, "outbound": "direct"},
+	}
+	bypassRoute, bypassDNS, ruleSets := bypassRules(bypass, ruleSetDir)
+	routeRules = append(routeRules, bypassRoute...)
+	dnsRules := []any{map[string]any{"server": "proxy-dns"}}
+	if bypassDNS != nil {
+		dnsRules = append([]any{bypassDNS}, dnsRules...)
 	}
 	if ip := net.ParseIP(serverIP); ip != nil {
 		serverRule := map[string]any{"ip_cidr": []any{ipToCIDR(ip)}, "outbound": "direct"}
@@ -87,7 +94,7 @@ func SingboxConfig(serverIP string) ([]byte, error) {
 				map[string]any{"type": "https", "tag": "proxy-dns", "server": "8.8.8.8", "server_port": 443, "path": "/dns-query", "detour": "proxy"},
 				map[string]any{"type": "udp", "tag": "local-dns", "server": "1.1.1.1", "server_port": 53},
 			},
-			"rules":    []any{map[string]any{"server": "proxy-dns"}},
+			"rules":    dnsRules,
 			"final":    "proxy-dns",
 			"strategy": "prefer_ipv4",
 		},
@@ -111,6 +118,9 @@ func SingboxConfig(serverIP string) ([]byte, error) {
 			"final":                   "proxy",
 			"rules":                   routeRules,
 		},
+	}
+	if len(ruleSets) > 0 {
+		cfg["route"].(map[string]any)["rule_set"] = ruleSets
 	}
 	return json.MarshalIndent(cfg, "", "  ")
 }

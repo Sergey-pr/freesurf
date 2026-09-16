@@ -299,7 +299,7 @@ type singboxDoc struct {
 
 func singboxConfigOf(t *testing.T, serverIP string) singboxDoc {
 	t.Helper()
-	data, err := SingboxConfig(serverIP)
+	data, err := SingboxConfig(serverIP, Bypass{}, "")
 	if err != nil {
 		t.Fatalf("SingboxConfig(%q): %v", serverIP, err)
 	}

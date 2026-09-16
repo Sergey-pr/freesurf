@@ -89,6 +89,9 @@ func XrayConfig() (string, error) { return inData("xray.json") }
 // XrayLog returns the Xray log path; sing-box logs into the root-owned directory.
 func XrayLog() (string, error) { return inData("xray.log") }
 
+// Rules is where the pre-flight check finds its rule-set files; root keeps its own copy.
+func Rules() (string, error) { return inData("rules") }
+
 // RestrictFile narrows a file to its owner, and does nothing on Windows.
 func RestrictFile(path string) error {
 	if runtime.GOOS == "windows" {
