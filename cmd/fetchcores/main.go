@@ -38,6 +38,7 @@ const (
 var ruleSets = []struct{ repo, commit, name string }{
 	{"SagerNet/sing-geoip", "7fe82a879ad2666526730c195b55a6d8d9147908", "geoip-ru.srs"},
 	{"SagerNet/sing-geosite", "2188cad8cff230c36953175811304957e6d04326", "geosite-category-ru.srs"},
+	{"SagerNet/sing-geosite", "2188cad8cff230c36953175811304957e6d04326", "geosite-reddit.srs"},
 }
 
 func main() {

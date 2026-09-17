@@ -2,9 +2,11 @@ package proxy
 
 import (
 	"context"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -80,10 +82,10 @@ func TestSingboxAcceptsGeneratedConfig(t *testing.T) {
 	}
 	t.Run("bypass", func(t *testing.T) {
 		dir := t.TempDir()
-		if err := WriteRuleSets(dir); err != nil {
-			t.Fatal(err)
+		if err := WriteRuleSets(dir, Bypass{Geo: slices.Collect(maps.Keys(GeoRuleSets))}); err != nil {
+			t.Skipf("rule-sets not embedded in this test build: %v", err)
 		}
-		bypass, err := ParseBypass("geoip:ru\ngeosite:category-ru\n10.1.0.0/16\n203.0.113.5\ndomain:example.com\nyandex.ru")
+		bypass, err := ParseBypass("geoip:ru\ngeosite:category-ru\ngeosite:reddit\n10.1.0.0/16\n203.0.113.5\ndomain:example.com\nyandex.ru\ngeoip:private\ndomain:ru\ndomain:su\ndomain:рф")
 		if err != nil {
 			t.Fatal(err)
 		}

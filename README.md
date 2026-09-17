@@ -1,127 +1,136 @@
 # FreeSurf
 
-A minimalistic, multi-platform (macOS / Windows) VPN client.
+FreeSurf is a small VPN client for macOS and Windows. You paste in a subscription or a server link, pick a node and press Start. All of your traffic then goes through the proxy, except for the addresses you choose to send directly.
 
-> **Status: working tunnel on macOS and Windows (VLESS).** The UI, data model,
-> local storage, and a real two-core TUN engine are in place. macOS is the primary
-> tested platform; Windows is implemented (native service + Wintun) but less
-> exercised. More protocols are next (see [Roadmap](#roadmap)).
+It currently supports VLESS servers (TLS, Reality, and the tcp, xhttp, ws, grpc and httpupgrade transports). Other protocols are not supported yet.
 
-## What works today
+## Download
 
-- Main window with a large **Start / Stop** button (with a *connecting* state).
-- Server list below it. A server (a subscription) collapses to show its child
-  nodes; single-node servers render flat.
-- Top-right **+** button → dropdown → **Paste from clipboard**: reads the system
-  clipboard and imports a subscription URL or one-or-more share URIs into the list.
-- Select a node, hit **Start**: the app installs both bundled cores (Xray +
-  sing-box), builds their configs, validates with `sing-box check`, installs a
-  privileged helper on first connect (one auth/UAC prompt), and brings the tunnel
-  up. **Stop** tears it down.
-- **Ping** an individual node or a whole subscription to see reachability/latency.
-  Names are resolved over DoH (bypassing local DNS interference) and each node is
-  probed the way it connects — TCP, or QUIC/UDP for HTTP/3 (`H3`) nodes.
-- Everything is persisted in SQLite.
+Get the latest build from the [Releases](https://github.com/Sergey-pr/free-surf/releases) page:
 
-### Tunnel engine (two cores)
+| Platform                | File                         |
+|-------------------------|------------------------------|
+| macOS (Apple Silicon)   | `freesurf-macos-arm64.zip`   |
+| Windows (64-bit)        | `freesurf-windows-amd64.zip` |
 
-A connection runs **two cores**, split by privilege:
+### macOS
 
-- **Xray** — runs *unprivileged* as the proxy backend, exposing a local SOCKS port.
-- **sing-box** — runs *privileged* (needs the TUN device); owns the full-tunnel TUN
-  inbound (`auto_route`) and routes traffic into Xray's SOCKS.
+The app is signed ad hoc but not notarized, so macOS blocks it the first time you open it. To allow it:
 
-- **Cores:** both binaries are embedded into the app at build time (fetched from
-  GitHub by `cmd/fetchcores`, which the build tasks run automatically) and pinned
-  to fixed versions. On first connect they are extracted into `<data>/bin/`;
-  versions are verified before use. No network access to GitHub is needed at
-  runtime.
-- **Parser:** `vless://` share URIs → Xray outbound (TLS / Reality / uTLS / ALPN /
-  flow / tcp・xhttp・ws・grpc・httpupgrade transports). VLESS only for now.
-- **Config:** full-tunnel TUN inbound (`auto_route`), DNS + route, proxy + direct
-  outbounds; a direct rule pins the server IP so the core's own traffic to the
-  server doesn't loop back into the TUN.
-- **Privileges:** the TUN core needs root / the TUN device, so it runs via a helper
-  installed once — the only prompt (password / UAC). macOS uses a launchd
-  LaunchDaemon; Windows a native Go service (LocalSystem) + Wintun. After that,
-  Start/Stop is just a request file, so it won't re-prompt.
+1. Unzip the archive and double-click `freesurf.app`. macOS will say it can't verify the developer.
+2. Open System Settings, then Privacy & Security.
+3. In the Security section you'll see "FreeSurf was blocked to protect your Mac." Click Open Anyway.
+4. Confirm with your password or Touch ID, then click Open.
 
-## Stack
+The Open Anyway button only shows up after a failed launch, and it goes away after about an hour.
 
-| Layer         | Tech                                                  |
-|---------------|------------------------------------------------------|
-| App framework | [Wails v3](https://v3.wails.io) (Go + native WebView) |
-| Language      | Go 1.25+                                              |
-| UI            | Vue 3 (Composition API) + Pinia + Vite               |
-| Database      | SQLite via `github.com/doug-martin/goqu`             |
+### Windows
 
-The visual design and project layout follow the `timespan` app; the VPN concepts
-(servers = subscriptions, sub-servers = nodes; later, the sing-box core) follow
-`singbox-launcher`.
+Unzip the archive and run `freesurf.exe`. If SmartScreen warns you, click More info, then Run anyway.
 
-## Prerequisites
+## Using FreeSurf
 
-- **Go** 1.25+
-- **Node.js** 20.19+ (or 22.12+, as Vite 8 requires) and npm
-- **Wails v3 CLI**: `go install github.com/wailsapp/wails/v3/cmd/wails3@latest`
-  (ensure `~/go/bin` is on your `PATH`)
+### Adding servers
 
-## Install (macOS)
+Copy a subscription URL, one or more `vless://` links, or a Happ `happ://crypt5/...` link. In FreeSurf, click + in the top right corner and choose Paste from clipboard.
 
-Release builds are ad-hoc signed but not notarized, so macOS blocks the first
-launch. Allow it through **System Settings**:
+A subscription shows up as a group you can expand to see its nodes. You can rename a subscription, refresh it by hand, or delete it. FreeSurf also refreshes subscriptions in the background, every 30 minutes by default. You can change the interval in Settings.
 
-1. Double-click `freesurf.app` — macOS refuses to open it (*"cannot be opened
-   because the developer cannot be verified"*).
-2. Open **System Settings → Privacy & Security**.
-3. Scroll to the **Security** section — you'll see *"FreeSurf was blocked to
-   protect your Mac."* Click **Open Anyway**.
-4. Confirm with your password / Touch ID, then click **Open** in the final dialog.
+### Connecting
 
-The **Open Anyway** button appears only after you've tried (and failed) to open the
-app once, and it stays available for about an hour.
+Select a node and press Start. Press Stop to disconnect.
 
-## Development
+The first time you connect, FreeSurf asks for your password on macOS, or shows a UAC prompt on Windows. It needs this once to install a small helper that is allowed to create the VPN network interface. After that, connecting and disconnecting won't prompt you again. You'll see the prompt one more time after an app update.
 
-```sh
-cd frontend && npm install && cd ..        # first time only
-wails3 dev -config ./build/config.yml      # hot-reload Go + Vue
+### Checking servers
+
+Use ping on a node or on a whole subscription to see which servers respond and how fast. FreeSurf checks each node the same way it would connect to it, so a node that answers the ping should also connect.
+
+If a connection fails, open the logs window to see what happened.
+
+### Sending some traffic around the VPN
+
+In Settings, the Bypass VPN field lists what should skip the proxy and go out directly. Write one rule per line. Anything after `#` is a comment.
+
+```
+10.0.0.0/8
+100.64.0.0/10
+172.16.0.0/12
+192.168.0.0/16
+169.254.0.0/16
+224.0.0.0/4
+255.255.255.255
+geoip:ru
+geoip:private
+domain:ru
+domain:su
+domain:рф
+geosite:category-ru
+geosite:reddit
+domain:nalog.ru
+domain:nalog.gov.ru
+domain:gosuslugi.ru
 ```
 
-## Build
+Supported geo lists are `geoip:ru`, `geoip:private`, `geosite:category-ru` and `geosite:reddit`. They ship inside the app, so they only update when you update FreeSurf.
+
+FreeSurf checks the list when you click Save and tells you which line is wrong. Changes take effect the next time you connect.
+
+Domains that match a bypass rule are also resolved by your regular DNS, so you get the addresses a direct connection should use. Domain rules may not catch apps that use their own encrypted DNS. For those, add the IP ranges as well.
+
+## Your data
+
+FreeSurf keeps servers and settings on your computer only:
+
+| Platform | Location                                             |
+|----------|------------------------------------------------------|
+| macOS    | `~/Library/Application Support/FreeSurf/`            |
+| Windows  | `%APPDATA%\FreeSurf\`                                |
+
+## Uninstalling
+
+Delete the app and the data folder above. The helper is installed separately, so remove it too.
+
+On macOS, run this in Terminal:
 
 ```sh
-wails3 build
+sudo launchctl bootout system /Library/LaunchDaemons/com.freesurf.helper.plist
+sudo rm -f /Library/LaunchDaemons/com.freesurf.helper.plist
+sudo rm -rf "/Library/Application Support/FreeSurf"
 ```
 
-## Regenerate JS bindings
+On Windows, run this in an administrator Command Prompt:
 
-After changing exported methods on `App` in `app.go`:
+```bat
+sc stop FreeSurfTunnel
+sc delete FreeSurfTunnel
+rmdir /s /q "%ProgramData%\FreeSurf"
+```
+
+## Building from source
+
+You need Go 1.25 or newer, Node.js 20.19+ or 22.12+, and the Wails v3 CLI:
 
 ```sh
-wails3 generate bindings -d frontend/bindings ./...
+go install github.com/wailsapp/wails/v3/cmd/wails3@latest
 ```
 
-## Data
+Then:
 
-State is stored in SQLite at:
+```sh
+cd frontend && npm install && cd ..
+wails3 build                                # release build
+wails3 dev -config ./build/config.yml       # development with hot reload
+```
 
-| Platform | Path                                                  |
-|----------|-------------------------------------------------------|
-| macOS    | `~/Library/Application Support/FreeSurf/freesurf.db`  |
-| Windows  | `%APPDATA%\FreeSurf\freesurf.db`                      |
+The build downloads the pinned sing-box and Xray binaries and the geo lists, checks their SHA-256 digests and embeds them into the app. A plain `go build` compiles without them, but that binary can't connect.
 
-## Roadmap
+## How it works
 
-1. ~~**Two-core engine**~~ - done (embed/pin Xray + sing-box, generate configs,
-   validate, run with privileges, real connect/disconnect).
-2. ~~**Windows TUN**~~ - done (native Go service + Wintun).
-3. ~~**Subscription fetching**~~ - done. Paste a subscription URL or a Happ
-   `happ://crypt5/…` deep link (decrypted locally, then fetched with the Happ
-   `User-Agent` + a stable `X-Hwid`); servers are imported as collapsible nodes.
-4. **More protocols** - decode VMess / Trojan / Shadowsocks / Hysteria2 / TUIC /
-   WireGuard (currently VLESS only) and Happ crypt1–4 links (crypt5 only so far).
+Each connection runs two programs. Xray runs as your user and talks to the VPN server. sing-box runs through the helper with administrator rights, owns the virtual network interface and passes traffic to Xray. Bypass rules are applied in sing-box.
+
+The helper only ever runs its own copies of these programs, stored in a folder that only administrators can write to. The app talks to it through a single request file. The helper checks that file strictly and builds the sing-box configuration itself.
 
 ## License
 
-MIT - see [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).

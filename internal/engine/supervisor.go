@@ -100,7 +100,7 @@ func superviseTunnel(files rootFiles, requestPath string, stop <-chan struct{}, 
 func startCore(files rootFiles, req tunnelRequest, lg *log.Logger, core **proxy.Process, running *tunnelRequest) {
 	_ = writeStatus(files.status, tunnelStatus{Nonce: req.Nonce, State: tunnelStarting})
 
-	err := proxy.WriteRuleSets(files.rules)
+	err := proxy.WriteRuleSets(files.rules, req.Bypass)
 	var cfg []byte
 	if err == nil {
 		cfg, err = proxy.SingboxConfig(req.ServerIP, req.Bypass, files.rules)

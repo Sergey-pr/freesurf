@@ -3,12 +3,15 @@ package proxy
 import (
 	"embed"
 	"fmt"
+	"maps"
 	"net"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
+
+	"golang.org/x/net/idna"
 )
 
 // Rule-set files are fetched by cmd/fetchcores at build time; only the README is committed.
@@ -20,7 +23,11 @@ var ruleSetsFS embed.FS
 var GeoRuleSets = map[string]string{
 	"geoip:ru":            "geoip-ru.srs",
 	"geosite:category-ru": "geosite-category-ru.srs",
+	"geosite:reddit":      "geosite-reddit.srs",
 }
+
+// geoPrivate needs no rule-set: the base config already sends private ranges direct.
+const geoPrivate = "geoip:private"
 
 // maxBypassRules caps the list, since the privileged supervisor parses it.
 const maxBypassRules = 1000
@@ -35,7 +42,7 @@ type Bypass struct {
 }
 
 // ParseBypass reads one rule per line: an IP or CIDR, domain:example.com (or a bare
-// domain, matching subdomains too), or a tag from GeoRuleSets. # starts a comment.
+// domain, matching subdomains too), geoip:private or a tag from GeoRuleSets. # starts a comment.
 func ParseBypass(text string) (Bypass, error) {
 	var b Bypass
 	for i, line := range strings.Split(text, "\n") {
@@ -47,6 +54,7 @@ func ParseBypass(text string) (Bypass, error) {
 			continue
 		}
 		switch {
+		case rule == geoPrivate:
 		case strings.HasPrefix(rule, "geoip:") || strings.HasPrefix(rule, "geosite:"):
 			if !slices.Contains(b.Geo, rule) {
 				b.Geo = append(b.Geo, rule)
@@ -56,7 +64,12 @@ func ParseBypass(text string) (Bypass, error) {
 		case strings.Contains(rule, "/"):
 			b.CIDRs = append(b.CIDRs, rule)
 		default:
-			b.Domains = append(b.Domains, strings.TrimPrefix(rule, "domain:"))
+			domain := strings.TrimPrefix(rule, "domain:")
+			// Internationalized names such as рф are matched in their punycode form.
+			if ascii, err := idna.Lookup.ToASCII(domain); err == nil {
+				domain = ascii
+			}
+			b.Domains = append(b.Domains, domain)
 		}
 		if err := b.Validate(); err != nil {
 			return Bypass{}, fmt.Errorf("line %d: %w", i+1, err)
@@ -82,7 +95,7 @@ func (b Bypass) Validate() error {
 	}
 	for i, g := range b.Geo {
 		if _, ok := GeoRuleSets[g]; !ok {
-			return fmt.Errorf("unsupported geo tag %q (supported: geoip:ru, geosite:category-ru)", g)
+			return fmt.Errorf("unsupported geo tag %q (supported: %s)", g, supportedGeoTags())
 		}
 		// A repeated tag would be a duplicate rule-set, which sing-box rejects.
 		if slices.Contains(b.Geo[:i], g) {
@@ -92,12 +105,23 @@ func (b Bypass) Validate() error {
 	return nil
 }
 
-// WriteRuleSets writes the embedded rule-set files into dir.
-func WriteRuleSets(dir string) error {
+func supportedGeoTags() string {
+	tags := append(slices.Collect(maps.Keys(GeoRuleSets)), geoPrivate)
+	slices.Sort(tags)
+	return strings.Join(tags, ", ")
+}
+
+// WriteRuleSets writes the embedded rule-set files that b references into dir.
+// Nothing is touched without geo tags, so a build without fetched rule-sets still connects.
+func WriteRuleSets(dir string, b Bypass) error {
+	if len(b.Geo) == 0 {
+		return nil
+	}
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
 	}
-	for _, name := range GeoRuleSets {
+	for _, g := range b.Geo {
+		name := GeoRuleSets[g]
 		data, err := ruleSetsFS.ReadFile("rulesets/" + name)
 		if err != nil {
 			return fmt.Errorf("rule-set %s is not embedded in this build (run `go generate ./internal/proxy` and rebuild): %w", name, err)

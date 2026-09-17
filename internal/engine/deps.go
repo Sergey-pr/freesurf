@@ -69,7 +69,7 @@ func checkedSingboxConfig(serverIP string, bypass proxy.Bypass) ([]byte, error) 
 	if err != nil {
 		return nil, err
 	}
-	if err := proxy.WriteRuleSets(dir); err != nil {
+	if err := proxy.WriteRuleSets(dir, bypass); err != nil {
 		return nil, err
 	}
 	return proxy.SingboxConfig(serverIP, bypass, dir)

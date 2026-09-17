@@ -22,6 +22,17 @@ func TestParseBypass(t *testing.T) {
 	}
 }
 
+func TestParseBypassRussianZones(t *testing.T) {
+	got, err := ParseBypass("geoip:private\ndomain:ru\ndomain:su\ndomain:рф\nпример.рф")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := Bypass{Domains: []string{"ru", "su", "xn--p1ai", "xn--e1afmkfd.xn--p1ai"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %#v, want %#v", got, want)
+	}
+}
+
 func TestParseBypassRejects(t *testing.T) {
 	for _, text := range []string{
 		"geoip:us",

@@ -18,4 +18,5 @@ var assetDigests = map[string]string{
 	// Rule-sets at the commits pinned in ruleSets
 	"geoip-ru.srs":            "6e23f5580dd443e2f9c4895adafee8d199c1a3487182ad5f0a2256cf59c7e53a",
 	"geosite-category-ru.srs": "c36e157adf86edf7b722b51f3acb93bbb2a7f8083932dae29b4b5ef2c1ced870",
+	"geosite-reddit.srs":      "11611c5c643ea855a7624ca2f1ab39d710dffbf42ca1c2b4d8570a8f07de83a9",
 }
