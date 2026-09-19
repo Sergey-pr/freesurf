@@ -2,6 +2,7 @@ package store
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -57,7 +58,7 @@ func TestMigrationsAreIdempotent(t *testing.T) {
 	if err := goquDB.QueryRow(`SELECT count(*) FROM schema_migrations`).Scan(&applied); err != nil {
 		t.Fatal(err)
 	}
-	if applied != 2 {
+	if applied != 3 {
 		t.Fatalf("schema_migrations holds %d rows, want one per migration file", applied)
 	}
 }
@@ -259,21 +260,84 @@ func TestDeleteServerCascadesToNodes(t *testing.T) {
 	}
 }
 
-func TestDeleteNodesByServerLeavesOtherServersAlone(t *testing.T) {
+func TestReplaceNodesLeavesOtherServersAlone(t *testing.T) {
 	openTestDB(t)
 	keep := saveServer(t, "keep")
-	drop := saveServer(t, "drop")
+	swap := saveServer(t, "swap")
 	saveNode(t, keep.ID, "kept", "vless://a@h:443", 0)
-	saveNode(t, drop.ID, "dropped", "vless://b@h:443", 0)
+	saveNode(t, swap.ID, "old", "vless://b@h:443", 0)
 
-	if err := DeleteNodesByServer(drop.ID); err != nil {
+	saved, err := ReplaceNodes(swap.ID, []Node{{Name: "new", URI: "vless://c@h:443"}})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if nodes, err := GetNodesByServer(drop.ID); err != nil || len(nodes) != 0 {
-		t.Fatalf("nodes %v err %v, want the server emptied", nodes, err)
+	if len(saved) != 1 || saved[0].ID == 0 || saved[0].ServerID != swap.ID {
+		t.Fatalf("saved = %+v, want one stored node under the server", saved)
+	}
+	if nodes, err := GetNodesByServer(swap.ID); err != nil || len(nodes) != 1 || nodes[0].Name != "new" {
+		t.Fatalf("nodes %v err %v, want only the new node", nodes, err)
 	}
 	if nodes, err := GetNodesByServer(keep.ID); err != nil || len(nodes) != 1 {
 		t.Fatalf("nodes %v err %v, want the other server untouched", nodes, err)
+	}
+}
+
+func TestReorderServers(t *testing.T) {
+	openTestDB(t)
+	a := saveServer(t, "a")
+	b := saveServer(t, "b")
+	c := saveServer(t, "c")
+
+	if err := ReorderServers([]int64{c.ID, a.ID, b.ID}); err != nil {
+		t.Fatal(err)
+	}
+	servers, err := GetServers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(names(servers), ","); got != "c,a,b" {
+		t.Fatalf("order = %s, want c,a,b", got)
+	}
+}
+
+func TestNewServerGoesLastAfterReorder(t *testing.T) {
+	openTestDB(t)
+	a := saveServer(t, "a")
+	b := saveServer(t, "b")
+	if err := ReorderServers([]int64{b.ID, a.ID}); err != nil {
+		t.Fatal(err)
+	}
+	saveServer(t, "c")
+
+	servers, err := GetServers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(names(servers), ","); got != "b,a,c" {
+		t.Fatalf("order = %s, want b,a,c", got)
+	}
+}
+
+func TestServerSaveKeepsSortOrder(t *testing.T) {
+	openTestDB(t)
+	a := saveServer(t, "a")
+	b := saveServer(t, "b")
+	stale := *a
+	if err := ReorderServers([]int64{b.ID, a.ID}); err != nil {
+		t.Fatal(err)
+	}
+	// A save from a snapshot taken before the reorder must not undo it.
+	stale.Name = "renamed"
+	if err := stale.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	servers, err := GetServers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(names(servers), ","); got != "b,renamed" {
+		t.Fatalf("order = %s, want b,renamed", got)
 	}
 }
 

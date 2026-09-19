@@ -54,19 +54,10 @@ func openDB(t *testing.T) {
 	t.Cleanup(func() { _ = store.CloseDB() })
 }
 
-// saveNodes mirrors the App adapter without needing a Wails application.
-func saveNodes(server *store.Server, nodes []store.Node) error {
-	if err := server.Save(); err != nil {
-		return err
-	}
-	for i := range nodes {
-		n := nodes[i]
-		n.ServerID = server.ID
-		if err := n.Save(); err != nil {
-			return err
-		}
-	}
-	return nil
+// replaceNodes mirrors the App adapter without needing a Wails application.
+func replaceNodes(serverID int64, nodes []store.Node) error {
+	_, err := store.ReplaceNodes(serverID, nodes)
+	return err
 }
 
 func subscription(t *testing.T, name, url string) *store.Server {
@@ -83,14 +74,14 @@ const twoNodes = "vless://a@one.example.com:443?type=tcp\nvless://b@two.example.
 func TestRefreshAllReplacesNodes(t *testing.T) {
 	openDB(t)
 	s := subscription(t, "sub", "https://example.com/sub")
-	if err := saveNodes(s, []store.Node{{Name: "stale", URI: "vless://old@h:443"}}); err != nil {
+	if err := replaceNodes(s.ID, []store.Node{{Name: "stale", URI: "vless://old@h:443"}}); err != nil {
 		t.Fatal(err)
 	}
 
 	ev := &eventLog{}
 	r := newRefresher(
 		func(context.Context, string) (string, error) { return twoNodes, nil },
-		saveNodes, ev.emit,
+		replaceNodes, ev.emit,
 	)
 	r.RefreshAll()
 
@@ -131,7 +122,7 @@ func TestRefreshAllSkipsServersWithoutAURL(t *testing.T) {
 	var fetched int
 	r := newRefresher(
 		func(context.Context, string) (string, error) { fetched++; return twoNodes, nil },
-		saveNodes, ev.emit,
+		replaceNodes, ev.emit,
 	)
 	r.RefreshAll()
 
@@ -140,11 +131,38 @@ func TestRefreshAllSkipsServersWithoutAURL(t *testing.T) {
 	}
 }
 
+// The refresh works from a snapshot, so it must not write that snapshot back.
+func TestRefreshKeepsARenameMadeDuringTheFetch(t *testing.T) {
+	openDB(t)
+	s := subscription(t, "sub", "https://example.com/sub")
+
+	r := newRefresher(
+		func(context.Context, string) (string, error) {
+			renamed := *s
+			renamed.Name = "renamed"
+			if err := renamed.Save(); err != nil {
+				t.Error(err)
+			}
+			return twoNodes, nil
+		},
+		replaceNodes, func(string, ...any) {},
+	)
+	r.RefreshAll()
+
+	got, err := store.GetServerByID(s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Name != "renamed" {
+		t.Fatalf("name = %q, want the rename to survive the refresh", got.Name)
+	}
+}
+
 // A failed refresh must leave the nodes the user already has.
 func TestRefreshServerKeepsNodesOnFailure(t *testing.T) {
 	openDB(t)
 	s := subscription(t, "sub", "https://example.com/sub")
-	if err := saveNodes(s, []store.Node{{Name: "keep", URI: "vless://old@h:443"}}); err != nil {
+	if err := replaceNodes(s.ID, []store.Node{{Name: "keep", URI: "vless://old@h:443"}}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -163,7 +181,7 @@ func TestRefreshServerKeepsNodesOnFailure(t *testing.T) {
 			ev := &eventLog{}
 			r := newRefresher(
 				func(context.Context, string) (string, error) { return tc.body, tc.fetch },
-				saveNodes, ev.emit,
+				replaceNodes, ev.emit,
 			)
 			if got := r.RefreshServer(s); got == "" || !strings.Contains(got, tc.wantMsg) {
 				t.Fatalf("message = %q, want it to mention %q", got, tc.wantMsg)
@@ -198,7 +216,7 @@ func TestRefreshAllRunsOneAtATime(t *testing.T) {
 			<-release
 			return twoNodes, nil
 		},
-		saveNodes, ev.emit,
+		replaceNodes, ev.emit,
 	)
 
 	done := make(chan struct{})
@@ -229,7 +247,7 @@ func TestStopCancelsAFetchInFlight(t *testing.T) {
 			<-ctx.Done()
 			return "", ctx.Err()
 		},
-		saveNodes, ev.emit,
+		replaceNodes, ev.emit,
 	)
 
 	r.Start()
@@ -248,7 +266,7 @@ func TestStopIsIdempotent(t *testing.T) {
 	openDB(t)
 	r := newRefresher(
 		func(context.Context, string) (string, error) { return twoNodes, nil },
-		saveNodes, func(string, ...any) {},
+		replaceNodes, func(string, ...any) {},
 	)
 	r.Start()
 	r.Stop()
@@ -260,7 +278,7 @@ func TestResetKeepsTheLoopAlive(t *testing.T) {
 	openDB(t)
 	r := newRefresher(
 		func(context.Context, string) (string, error) { return twoNodes, nil },
-		saveNodes, func(string, ...any) {},
+		replaceNodes, func(string, ...any) {},
 	)
 	r.Start()
 	for i := 0; i < 5; i++ {

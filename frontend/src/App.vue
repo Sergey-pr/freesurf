@@ -62,15 +62,20 @@
           <strong>+</strong> → <em>Paste from clipboard</em>.
         </div>
 
-        <div v-else class="server-list">
+        <div v-else class="server-list" @dragover.prevent @drop.prevent>
           <ServerItem
-            v-for="server in store.servers"
+            v-for="(server, i) in store.servers"
             :key="server.id"
             :server="server"
             :selected-node-id="store.selectedNodeId"
             :active-node-id="store.isConnected ? store.conn.nodeId : 0"
+            :reorderable="store.servers.length > 1"
+            :class="{ dragging: server.id === dragId }"
             @select="store.select($event)"
             @delete="confirmDelete($event)"
+            @drag-start="dragId = $event"
+            @dragover="onDragOver($event, i)"
+            @dragend="onDragEnd"
           />
         </div>
       </div>
@@ -100,6 +105,26 @@ const menuOpen = ref(false)
 const addWrap = ref(null)
 const pendingDeleteId = ref(null)
 const settingsOpen = ref(false)
+const dragId = ref(0)
+
+// Move the dragged card once the cursor crosses the target's middle, so cards
+// of different heights don't flip back and forth.
+function onDragOver(e, index) {
+  if (!dragId.value) return
+  const from = store.servers.findIndex(s => s.id === dragId.value)
+  if (from === index) return
+  const rect = e.currentTarget.getBoundingClientRect()
+  const pastMiddle = e.clientY > rect.top + rect.height / 2
+  if ((from < index && pastMiddle) || (from > index && !pastMiddle)) {
+    store.moveServer(dragId.value, index)
+  }
+}
+
+async function onDragEnd() {
+  if (!dragId.value) return
+  dragId.value = 0
+  await store.saveServerOrder()
+}
 
 function confirmDelete(id) {
   pendingDeleteId.value = id
@@ -298,6 +323,8 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 8px;
 }
+
+.server-list .dragging { opacity: 0.4; }
 
 .empty-state {
   font-size: 12px;

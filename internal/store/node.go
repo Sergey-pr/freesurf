@@ -57,10 +57,32 @@ func GetNodeByURI(uri string) (*Node, error) {
 	return &n, nil
 }
 
-// DeleteNodesByServer removes all nodes belonging to a server.
-func DeleteNodesByServer(serverID int64) error {
-	_, err := goquDB.Delete(nodeTable).Where(goqu.C("server_id").Eq(serverID)).Executor().Exec()
-	return err
+// ReplaceNodes swaps a server's nodes for the given ones in one transaction, so
+// a concurrent reader never sees the server empty or half-filled.
+func ReplaceNodes(serverID int64, nodes []Node) ([]Node, error) {
+	saved := make([]Node, 0, len(nodes))
+	err := goquDB.WithTx(func(tx *goqu.TxDatabase) error {
+		if _, err := tx.Delete(nodeTable).Where(goqu.C("server_id").Eq(serverID)).Executor().Exec(); err != nil {
+			return err
+		}
+		for _, n := range nodes {
+			n.ServerID = serverID
+			n.CreatedAt = time.Now()
+			result, err := tx.Insert(nodeTable).Rows(n).Executor().Exec()
+			if err != nil {
+				return err
+			}
+			if n.ID, err = result.LastInsertId(); err != nil {
+				return err
+			}
+			saved = append(saved, n)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return saved, nil
 }
 
 // Save inserts or updates the node. ID == 0 means a new record.

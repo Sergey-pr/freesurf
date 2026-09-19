@@ -27,7 +27,7 @@ type App struct {
 
 func NewApp() *App {
 	a := &App{engine: engine.New()}
-	a.refresher = newRefresher(subs.FetchSubscription, a.saveNodes, emitEvent)
+	a.refresher = newRefresher(subs.FetchSubscription, a.replaceNodes, emitEvent)
 	return a
 }
 
@@ -202,27 +202,36 @@ func (a *App) RefreshServer(id int64) *store.ServerWithNodes {
 	return &store.ServerWithNodes{Server: *server, Nodes: nodes}
 }
 
-// saveServer inserts the server (if new) and its nodes, returning the combined view.
-// saveNodes stores a server and its nodes, discarding the assembled result.
-func (a *App) saveNodes(server *store.Server, nodes []store.Node) error {
-	_, err := a.saveServer(server, nodes)
-	return err
-}
-
+// saveServer saves a new server with its nodes, returning the combined view.
 func (a *App) saveServer(server *store.Server, nodes []store.Node) (*store.ServerWithNodes, error) {
 	if err := server.Save(); err != nil {
 		return nil, err
 	}
-	saved := make([]store.Node, 0, len(nodes))
-	for i := range nodes {
-		n := nodes[i]
-		n.ServerID = server.ID
-		if err := n.Save(); err != nil {
-			return nil, err
-		}
-		saved = append(saved, n)
+	saved, err := store.ReplaceNodes(server.ID, nodes)
+	if err != nil {
+		return nil, err
 	}
 	return &store.ServerWithNodes{Server: *server, Nodes: saved}, nil
+}
+
+// replaceNodes swaps a server's nodes and keeps the connection on its node's new ID.
+func (a *App) replaceNodes(serverID int64, nodes []store.Node) error {
+	oldID := a.engine.State().NodeID
+	var activeURI string
+	if old, err := store.GetNodeByID(oldID); err == nil && old.ServerID == serverID {
+		activeURI = old.URI
+	}
+	saved, err := store.ReplaceNodes(serverID, nodes)
+	if err != nil {
+		return err
+	}
+	for _, n := range saved {
+		if activeURI != "" && n.URI == activeURI {
+			a.engine.RenumberNode(oldID, n.ID)
+			break
+		}
+	}
+	return nil
 }
 
 // PingNode returns the connect latency (ms) to a node's server, or -1 on failure,
@@ -265,6 +274,16 @@ func (a *App) PingServer(id int64) map[int64]int {
 		mu.Unlock()
 	})
 	return out
+}
+
+// ReorderServers saves the server list order, first id on top.
+func (a *App) ReorderServers(ids []int64) bool {
+	if err := store.ReorderServers(ids); err != nil {
+		a.showError(err)
+		return false
+	}
+	application.Get().Event.Emit("servers:changed")
+	return true
 }
 
 func (a *App) RenameServer(id int64, name string) *store.Server {

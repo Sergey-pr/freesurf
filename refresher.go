@@ -15,7 +15,7 @@ const refreshTimeout = 45 * time.Second
 // refresher keeps subscription servers up to date on the interval from settings.
 type refresher struct {
 	fetch func(context.Context, string) (string, error)
-	save  func(*store.Server, []store.Node) error
+	save  func(serverID int64, nodes []store.Node) error
 	emit  func(string, ...any)
 
 	running sync.Mutex // one pass at a time
@@ -28,7 +28,7 @@ type refresher struct {
 
 func newRefresher(
 	fetch func(context.Context, string) (string, error),
-	save func(*store.Server, []store.Node) error,
+	save func(serverID int64, nodes []store.Node) error,
 	emit func(string, ...any),
 ) *refresher {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -126,10 +126,8 @@ func (r *refresher) RefreshServer(server *store.Server) string {
 		return "no nodes found in subscription"
 	}
 	// Only past the checks above, so a failed fetch leaves the old nodes in place.
-	if err := store.DeleteNodesByServer(server.ID); err != nil {
-		return err.Error()
-	}
-	if err := r.save(server, nodes); err != nil {
+	// The server row is not saved: a rename made during the fetch must survive.
+	if err := r.save(server.ID, nodes); err != nil {
 		return err.Error()
 	}
 	return ""

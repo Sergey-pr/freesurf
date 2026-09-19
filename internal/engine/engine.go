@@ -86,6 +86,19 @@ func (e *Engine) setState(s ConnState) {
 	e.deps.emit("vpn:state", s)
 }
 
+// RenumberNode moves the state from oldID to newID after a refresh re-saved the node.
+func (e *Engine) RenumberNode(oldID, newID int64) {
+	e.mu.Lock()
+	if e.conn.NodeID != oldID || oldID == newID {
+		e.mu.Unlock()
+		return
+	}
+	e.conn.NodeID = newID
+	s := e.conn
+	e.mu.Unlock()
+	e.deps.emit("vpn:state", s)
+}
+
 var (
 	// ANSI colour/style escape sequences emitted by sing-box.
 	ansiRe = regexp.MustCompile("\x1b\\[[0-9;]*[a-zA-Z]")

@@ -596,3 +596,26 @@ func TestConnectSwitchingNodesStopsTheOldBackend(t *testing.T) {
 	}
 	h.e.Disconnect()
 }
+
+func TestRenumberNodeFollowsTheConnectedNode(t *testing.T) {
+	h := newHarness(t)
+	if _, err := h.e.Connect(testNode(), proxy.Bypass{}); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	defer h.e.Disconnect()
+
+	h.e.RenumberNode(99, 42)
+	if got := h.e.State().NodeID; got != 7 {
+		t.Fatalf("NodeID = %d after renumbering another node, want 7", got)
+	}
+	h.e.RenumberNode(7, 42)
+	if st := h.e.State(); st.NodeID != 42 || st.Status != StatusConnected {
+		t.Fatalf("state = %+v, want connected node 42", st)
+	}
+	h.mu.Lock()
+	last := h.states[len(h.states)-1]
+	h.mu.Unlock()
+	if last.NodeID != 42 {
+		t.Fatalf("last emitted node = %d, want 42", last.NodeID)
+	}
+}

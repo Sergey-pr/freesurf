@@ -201,6 +201,15 @@ export function RenameServer(id, name) {
 }
 
 /**
+ * ReorderServers saves the server list order, first id on top.
+ * @param {number[]} ids
+ * @returns {$CancellablePromise<boolean>}
+ */
+export function ReorderServers(ids) {
+    return $Call.ByID(1047991000, ids);
+}
+
+/**
  * SetAutoRefreshMinutes persists the auto-refresh interval and restarts the timer.
  * @param {number} minutes
  * @returns {$CancellablePromise<number>}

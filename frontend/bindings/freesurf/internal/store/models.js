@@ -110,6 +110,13 @@ export class Server {
              */
             this["url"] = undefined;
         }
+        if (!("sortOrder" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["sortOrder"] = 0;
+        }
         if (!("createdAt" in $$source)) {
             /**
              * @member
@@ -169,6 +176,13 @@ export class ServerWithNodes {
              */
             this["url"] = undefined;
         }
+        if (!("sortOrder" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["sortOrder"] = 0;
+        }
         if (!("createdAt" in $$source)) {
             /**
              * @member
@@ -193,10 +207,10 @@ export class ServerWithNodes {
      * @returns {ServerWithNodes}
      */
     static createFrom($$source = {}) {
-        const $$createField5_0 = $$createType1;
+        const $$createField6_0 = $$createType1;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("nodes" in $$parsedSource) {
-            $$parsedSource["nodes"] = $$createField5_0($$parsedSource["nodes"]);
+            $$parsedSource["nodes"] = $$createField6_0($$parsedSource["nodes"]);
         }
         return new ServerWithNodes(/** @type {Partial<ServerWithNodes>} */($$parsedSource));
     }

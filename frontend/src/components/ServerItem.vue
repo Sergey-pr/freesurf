@@ -1,6 +1,13 @@
 <template>
-  <div class="server-item">
+  <div ref="root" class="server-item">
     <div class="server-header">
+      <span
+        v-if="reorderable"
+        class="drag-handle"
+        title="Drag to reorder"
+        draggable="true"
+        @dragstart="onDragStart"
+      >⋮⋮</span>
       <button
         v-if="collapsible"
         class="chevron-btn"
@@ -88,12 +95,22 @@ const props = defineProps({
   server: { type: Object, required: true },
   selectedNodeId: { type: Number, default: 0 },
   activeNodeId: { type: Number, default: 0 },
+  reorderable: { type: Boolean, default: false },
 })
 
-defineEmits(['select', 'delete'])
+const emit = defineEmits(['select', 'delete', 'drag-start'])
 
 const store = useServerStore()
 const open = ref(true)
+const root = ref(null)
+
+// The handle starts the drag, but the whole card is shown under the cursor.
+function onDragStart(e) {
+  e.dataTransfer.effectAllowed = 'move'
+  e.dataTransfer.setData('text/plain', String(props.server.id))
+  e.dataTransfer.setDragImage(root.value, 16, 16)
+  emit('drag-start', props.server.id)
+}
 const hasNodes = computed(() => (props.server.nodes?.length ?? 0) > 0)
 
 // sortedNodes orders nodes by measured latency, fastest first, updating live as
@@ -213,6 +230,17 @@ function pingClass(id) {
   gap: 6px;
   padding: 8px 10px;
 }
+
+.drag-handle {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: -3px;
+  padding: 0 4px 0 0;
+  cursor: grab;
+  user-select: none;
+}
+.drag-handle:hover { color: var(--text); }
+.drag-handle:active { cursor: grabbing; }
 
 .chevron-btn {
   background: none;

@@ -5,6 +5,7 @@ import {
   GetServers,
   AddFromClipboard,
   RenameServer,
+  ReorderServers,
   DeleteServer,
   RefreshServer,
   PingNode,
@@ -48,10 +49,10 @@ export const useServerStore = defineStore('servers', () => {
 
   async function load() {
     servers.value = (await GetServers()) ?? []
-    // Keep selection valid; fall back to the remembered node, then to the first one.
-    if (!selectedNode.value) {
-      selectedNodeId.value = (await GetSelectedNodeID()) || firstNodeId()
-    }
+    // The saved node wins, so a fallback taken mid-refresh never sticks.
+    const remembered = await GetSelectedNodeID()
+    if (remembered) selectedNodeId.value = remembered
+    if (!selectedNode.value) selectedNodeId.value = firstNodeId()
   }
 
   function firstNodeId() {
@@ -61,16 +62,16 @@ export const useServerStore = defineStore('servers', () => {
     return 0
   }
 
-  function select(nodeId) {
+  async function select(nodeId) {
     selectedNodeId.value = nodeId
-    SetSelectedNodeID(nodeId)
+    await SetSelectedNodeID(nodeId)
   }
 
   async function addFromClipboard() {
     const created = await AddFromClipboard()
     await load()
     if (created && created.nodes && created.nodes.length) {
-      select(created.nodes[0].id)
+      await select(created.nodes[0].id)
     }
     return created
   }
@@ -78,6 +79,19 @@ export const useServerStore = defineStore('servers', () => {
   async function renameServer(id, name) {
     await RenameServer(id, name)
     await load()
+  }
+
+  // moveServer reorders the list locally; saveServerOrder persists it.
+  function moveServer(id, toIndex) {
+    const list = [...servers.value]
+    const from = list.findIndex(s => s.id === id)
+    if (from < 0 || from === toIndex) return
+    list.splice(toIndex, 0, list.splice(from, 1)[0])
+    servers.value = list
+  }
+
+  async function saveServerOrder() {
+    await ReorderServers(servers.value.map(s => s.id))
   }
 
   async function deleteServer(id) {
@@ -167,6 +181,8 @@ export const useServerStore = defineStore('servers', () => {
     select,
     addFromClipboard,
     renameServer,
+    moveServer,
+    saveServerOrder,
     deleteServer,
     refreshServer,
     pingNode,
